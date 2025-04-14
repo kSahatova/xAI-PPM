@@ -28,7 +28,7 @@ class DatasetManager:
         """Reads the dataset from a given file path."""
 
         # set 'float' type for numeric columns and 'object' fir the rest
-        dtypes = {col: "np.float16" for col in self.dynamic_num_cols + self.static_num_cols} 
+        dtypes = {col: "float" for col in self.dynamic_num_cols + self.static_num_cols} 
         for col in (self.dynamic_cat_cols + self.static_cat_cols
                        + [self.case_id, self.label, self.timestamp]):
             dtypes[col] = "object"
