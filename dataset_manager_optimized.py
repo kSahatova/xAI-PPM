@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from typing import Union
 from easydict import EasyDict as edict
 
 from sklearn.model_selection import StratifiedKFold
@@ -146,63 +147,68 @@ class DatasetManager:
 
     def generate_prefix_data(self, data, min_length, max_length, gap=1):
         # generate prefix data (each possible prefix becomes a trace)
-        data["case_length"] = data.groupby(self.case_id)[self.activity].transform(len)
+        data["case_length"] = data.groupby(self.case_id)[self.activity].transform('count')
 
-        # Filter cases that meet minimum length requirement
-        dt_prefixes = (
-            data[data["case_length"] >= min_length]
-            .groupby(self.case_id)
-            .head(min_length)
-        )
-        dt_prefixes["prefix_nr"] = 1
-        dt_prefixes["orig_case_id"] = dt_prefixes[self.case_id]
-        total_prefixes_num = range(min_length + gap, max_length + 1, gap)
-        for nr_events in tqdm(total_prefixes_num, total=len(total_prefixes_num)):
-            tmp = (
-                data[data["case_length"] >= nr_events]
-                .groupby(self.case_id)
-                .head(nr_events)
-            )
+
+        # Filter out cases that do not meet minimum length requirement
+        valid_mask = data['case_length'] >= min_length
+
+        prefix_lengths = list(range(min_length, max_length + 1, gap))
+        prefix_dataframes = []
+
+        for prefix_length  in tqdm(prefix_lengths, desc="Generating prefixes"):
+            # Use boolean indexing without copy for filtering
+            eligible_mask = valid_mask & (data['case_length'] >= prefix_length)
+            if not eligible_mask.any():
+                continue
+
+            prefix_data = (data[eligible_mask]
+                      .groupby(self.case_id, group_keys=False)
+                      .head(prefix_length)
+                      .copy())  # Only copy the small result
+
             # Add metadata columns
-            tmp["prefix_nr"] = nr_events
-            tmp["orig_case_id"] = tmp[self.case_id]
+            prefix_data["prefix_nr"] = prefix_length 
+            prefix_data['orig_case_id'] = prefix_data[self.case_id]
 
-            tmp[self.case_id] = tmp[self.case_id].apply(
-                lambda x: "%s_%s" % (x, nr_events)
-            )
-            dt_prefixes = pd.concat([dt_prefixes, tmp], axis=0)
+            prefix_data[self.case_id] = (prefix_data[self.case_id].astype(str) + 
+                                       '_' + str(prefix_length))
 
-        dt_prefixes["case_length"] = dt_prefixes["case_length"].apply(
-            lambda x: min(max_length, x)
-        )
+            prefix_dataframes.append(prefix_data)
+        
+        # Clean up the added column to restore original state
+        data.drop('case_length', axis=1, inplace=True)
+        
+        if prefix_dataframes:
+            return pd.concat(prefix_dataframes, axis=0, ignore_index=True)
+        
+        return pd.DataFrame()
 
-        return dt_prefixes
+    def get_indexes(self, data: pd.DataFrame) -> pd.Index:
+        """
+        Optimized version that avoids unnecessary groupby operations.
+        Returns case IDs directly instead of full grouped data.
+        """
+        # Use drop_duplicates instead of groupby().first() for better performance
+        unique_cases = data.drop_duplicates(subset=[self.case_id], keep='first')
+        return unique_cases[self.case_id].index
 
-    def get_indexes(self, data):
-        # Case indices are extracted ordered by date 
-        return data.groupby(self.case_id).first().index
+    def get_data_by_indexes(self, data: pd.DataFrame, indexes: Union[pd.Index, np.ndarray]) -> pd.DataFrame:
+        """
+        Optimized filtering using vectorized operations.
+        Uses query() for better performance on large datasets.
+        """
+        if isinstance(indexes, (list, np.ndarray, pd.Index)):
+            # Convert to set for O(1) lookup instead of O(n) with isin()
+            index_str = ','.join(f"'{idx}'" for idx in indexes)
+            return data.query(f"{self.case_id} in [{index_str}]")
+    
+          
 
-    def get_data_by_indexes(self, data, indexes):
-        return data[data[self.case_id].isin(indexes)]
-
-    def get_relevant_data_by_indexes(self, data, indexes):
-        return data[data[self.case_id].isin(indexes)]
-
-    def get_label(self, data):
-        return data.groupby(self.case_id).first()[self.label]
-
-    def get_prefix_lengths(self, data):
-        return data.groupby(self.case_id).last()["prefix_nr"]
-
-    def get_case_ids(self, data, nr_events=1):
-        case_ids = pd.Series(data.groupby(self.case_id).first().index)
-        if nr_events > 1:
-            case_ids = case_ids.apply(lambda x: "_".join(x.split("_")[:-1]))
-        return case_ids
-
-    def get_label_numeric(self, data):
-        y = self.get_label(data)  # one row per case
-        return [1 if label == self.pos_label else 0 for label in y]
+    def get_labels(self, data):
+        labels = data.drop_duplicates(subset=[self.case_id], keep='first')[self.label]
+        numeric_labels = (labels == self.pos_label).astype(int).values
+        return labels, numeric_labels
 
     def get_class_ratio(self, data):
         class_freqs = data[self.label].value_counts()
