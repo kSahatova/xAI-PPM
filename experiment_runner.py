@@ -5,45 +5,37 @@ from easydict import EasuDict as edict
 from typing import Union, Optional, List, Dict
 
 from sklearn.pipeline import FeatureUnion
+from dataset_manager_optimized import DatasetManager, CVFoldsManager
+from preprocessing.encoding import get_encoder
 
 
 class ExperimentRunner:
     """Main experiment orchestrator combining all components"""
-    def __init__(self, dataset_name: str, bucket_method: str, cls_method: str, 
-                encoding_method: str, random_state: int = 22):
+    def __init__(self, dataset_name: str, dataset_manager: DatasetManager,  
+                bucket_method: str, encoding_methods: List[str], preprocessing_args: edict,
+                cls_method: str, cls_args: Dict, random_state: int = 22):
         self.dataset_name = dataset_name
+        self.dataset_manager = dataset_manager
         self.bucket_method = bucket_method
+        self.encoding_methods = encoding_methods
+        self.preprocessing_args = preprocessing_args
+
         self.cls_method = cls_method
-        self.encoding_method = encoding_method
+        self.cls_args = cls_args
         self.random_state = random_state
         
         # Initialize components
-        self.dataset_manager = DatasetManager(dataset_name)
-        self.cv_manager = CrossValidationManager(random_state=random_state)
-        self.bucketing_manager = BucketingManager(bucket_method, self.dataset_manager, random_state)
+        cv_n_splits = preprocessing_args.cv_n_folds if preprocessing_args.cv_n_folds else 3
+        self.cv_manager = CVFoldsManager(n_splits=cv_n_splits, 
+                                        random_state=random_state)
+
+        enc_args = self.preprocessing_args.encoding_args
+        self.encoders =  [(enc_method, get_encoder(enc_method, **enc_args)) for enc_method in self.encoding_methods]              
         
-        # Setup encoding methods
-        encoding_dict = {
-            "laststate": ["static", "last"],
-            "agg": ["static", "agg"],
-            "index": ["static", "index"],
-            "combined": ["static", "last", "agg"]
-        }
-        self.methods = encoding_dict[encoding_method]
-        
-        # Setup encoder arguments
-        self.cls_encoder_args = {
-            'case_id_col': self.dataset_manager.case_id_col,
-            'static_cat_cols': self.dataset_manager.static_cat_cols,
-            'static_num_cols': self.dataset_manager.static_num_cols,
-            'dynamic_cat_cols': self.dataset_manager.dynamic_cat_cols,
-            'dynamic_num_cols': self.dataset_manager.dynamic_num_cols,
-            'fillna': True
-        }
-        
-        self.training_pipeline = ModelTrainingPipeline(
-            cls_method, self.methods, self.cls_encoder_args, random_state
-        )
+        # self.training_pipeline = ModelTrainingPipeline(
+        #     cls_method, self.methods, self.cls_encoder_args, random_state
+        # )
+
 
     def run_cross_validation_experiment(self, args: Dict, n_splits: int = 3) -> Dict:
         """Run complete CV experiment with timing"""

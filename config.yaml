@@ -1,0 +1,12 @@
+# configuration of data preprocessing
+data_dir : ''
+encoding_method: 'agg'
+bucketing_method: 'single'
+
+
+# classification model
+classification_model: 'rf'
+classification_args: {
+  
+}
+

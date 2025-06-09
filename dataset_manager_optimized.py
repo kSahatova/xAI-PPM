@@ -1,27 +1,28 @@
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from typing import Union
+from typing import Union, Tuple, List
 from easydict import EasyDict as edict
 
 from sklearn.model_selection import StratifiedKFold
 
+from dataset_column_schema import DatasetColumnSchema
+
 
 class DatasetManager:
-    def __init__(self, ds_name: str = "BPIC2017", ds_config: edict = None):
+    def __init__(self, ds_name: str, ds_column_schema: DatasetColumnSchema):
         self.dataset_name = ds_name
-        self.config = ds_config
 
-        self.case_id = ds_config.columns.case_id_col
-        self.activity = ds_config.columns.activity_col
-        self.timestamp = ds_config.columns.timestamp_col
-        self.label = ds_config.columns.label_col
-        self.pos_label = ds_config.columns.pos_label_col
+        self.case_id = ds_column_schema.case_id_col
+        self.activity = ds_column_schema.activity_col
+        self.timestamp = ds_column_schema.timestamp_col
+        self.label = ds_column_schema.label_col
+        self.pos_label = ds_column_schema.pos_label_col
 
-        self.dynamic_cat_cols = ds_config.columns.dynamic_cat_cols
-        self.static_cat_cols = ds_config.columns.static_cat_cols
-        self.dynamic_num_cols = ds_config.columns.dynamic_num_cols
-        self.static_num_cols = ds_config.columns.static_num_cols
+        self.dynamic_cat_cols = ds_column_schema.dynamic_cat_cols
+        self.static_cat_cols = ds_column_schema.static_cat_cols
+        self.dynamic_num_cols = ds_column_schema.dynamic_num_cols
+        self.static_num_cols = ds_column_schema.static_num_cols
 
         self.sorting_cols = [self.timestamp, self.activity]
 
@@ -31,7 +32,7 @@ class DatasetManager:
         # set 'float' type for numeric columns and 'object' fir the rest
         dtypes = {col: "float" for col in self.dynamic_num_cols + self.static_num_cols} 
         for col in (self.dynamic_cat_cols + self.static_cat_cols
-                       + [self.case_id, self.label, self.timestamp]):
+                    + [self.case_id, self.label, self.timestamp]):
             dtypes[col] = "object"
 
         data = pd.read_csv(file_path, sep=";", dtype=dtypes)
@@ -245,3 +246,35 @@ class DatasetManager:
             current_train_names = dt_for_splitting[self.case_id][train_index]
             current_test_names = dt_for_splitting[self.case_id][test_index]
             yield (current_train_names, current_test_names)
+
+
+class CVFoldsManager:
+    """Manages cross-validation splits with consistent indexing"""
+    
+    def __init__(self, n_splits: int = 3, random_state: int = 22):
+        self.n_splits = n_splits
+        self.random_state = random_state
+        
+    def create_cv_splits(self, dataset_manager: DatasetManager, train_data: pd.DataFrame) -> Tuple[List[pd.DataFrame], List[float]]:
+        """Create stratified CV splits and return prefixes with class ratios"""
+        dt_prefixes = []
+        class_ratios = []
+        
+        for train_chunk, test_chunk in dataset_manager.get_stratified_split_generator(
+            train_data, n_splits=self.n_splits
+        ):
+            class_ratios.append(dataset_manager.get_class_ratio(train_chunk))
+            dt_prefixes.append(test_chunk)
+            
+        return dt_prefixes, class_ratios
+    
+    def get_train_test_folds(self, dt_prefixes: List[pd.DataFrame], cv_iter: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Get train/test split for specific CV iteration"""
+        dt_test_prefixes = dt_prefixes[cv_iter]
+        dt_train_prefixes = pd.DataFrame()
+        
+        for cv_train_iter in range(self.n_splits):
+            if cv_train_iter != cv_iter:
+                dt_train_prefixes = pd.concat([dt_train_prefixes, dt_prefixes[cv_train_iter]], axis=0)
+                
+        return dt_train_prefixes, dt_test_prefixes
