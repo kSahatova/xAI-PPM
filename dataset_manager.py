@@ -30,7 +30,7 @@ class DatasetManager:
         # set 'float' type for numeric columns and 'object' fir the rest
         dtypes = {col: "float" for col in self.dynamic_num_cols + self.static_num_cols} 
         for col in (self.dynamic_cat_cols + self.static_cat_cols
-                       + [self.case_id, self.label, self.timestamp]):
+                    + [self.case_id, self.label, self.timestamp]):
             dtypes[col] = "object"
 
         data = pd.read_csv(file_path, sep=";", dtype=dtypes)
@@ -181,9 +181,6 @@ class DatasetManager:
     def get_indexes(self, data):
         # Case indices are extracted ordered by date 
         return data.groupby(self.case_id).first().index
-
-    def get_data_by_indexes(self, data, indexes):
-        return data[data[self.case_id].isin(indexes)]
 
     def get_relevant_data_by_indexes(self, data, indexes):
         return data[data[self.case_id].isin(indexes)]

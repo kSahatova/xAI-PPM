@@ -153,7 +153,7 @@ class DatasetManager:
         # Filter out cases that do not meet minimum length requirement
         valid_mask = data['case_length'] >= min_length
 
-        prefix_lengths = list(range(min_length, max_length + 1, gap))
+        prefix_lengths = list(range(min_length + gap, max_length + 1, gap))
         prefix_dataframes = []
 
         for prefix_length  in tqdm(prefix_lengths, desc="Generating prefixes"):
@@ -193,20 +193,18 @@ class DatasetManager:
         unique_cases = data.drop_duplicates(subset=[self.case_id], keep='first')
         return unique_cases[self.case_id].index
 
-    def get_data_by_indexes(self, data: pd.DataFrame, indexes: Union[pd.Index, np.ndarray]) -> pd.DataFrame:
+    def get_data_by_indexes(self, data: pd.DataFrame, indices: Union[pd.Index, np.ndarray]) -> pd.DataFrame:
         """
         Optimized filtering using vectorized operations.
         Uses query() for better performance on large datasets.
         """
-        if isinstance(indexes, (list, np.ndarray, pd.Index)):
-            # Convert to set for O(1) lookup instead of O(n) with isin()
-            index_str = ','.join(f"'{idx}'" for idx in indexes)
-            return data.query(f"{self.case_id} in [{index_str}]")
-    
-          
+
+        return data.iloc[indices]
 
     def get_labels(self, data):
+        # labels = data.groupby(self.case_id).first()[self.label]
         labels = data.drop_duplicates(subset=[self.case_id], keep='first')[self.label]
+        # numeric_labels = np.asarray([1 if label == self.pos_label else 0 for label in labels])
         numeric_labels = (labels == self.pos_label).astype(int).values
         return labels, numeric_labels
 
