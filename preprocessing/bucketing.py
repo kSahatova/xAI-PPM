@@ -1,8 +1,7 @@
 import numpy as np
 
 
-def get_bucketer(method, encoding_method=None, 
-                 case_id_col=None, cat_cols=None, 
+def get_bucketer(method, case_id_col=None, cat_cols=None, encoding_method=None,
                  num_cols=None, n_clusters=None, 
                  random_state=None, n_neighbors=None):
     if method == "single":
