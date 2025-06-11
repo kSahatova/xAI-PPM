@@ -1,5 +1,5 @@
 import EncoderFactory
-from DatasetManager import DatasetManager
+from xai_ppm_cmparison_code.DatasetManager import DatasetManager
 import BucketFactory
 
 import pandas as pd

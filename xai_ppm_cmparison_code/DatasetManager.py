@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import StratifiedKFold
 import os
-import Definitions
+import xai_ppm_cmparison_code.Definitions as Definitions
 logs_dir = 'logs'
 
 

@@ -21,7 +21,7 @@ from matplotlib import pyplot as plt
 
 from preprocessing.bucketing import get_bucketer
 from preprocessing.encoding import get_encoder
-from DatasetManager import DatasetManager
+from xai_ppm_cmparison_code.DatasetManager import DatasetManager
 
 plt.ioff()
 matplotlib.use('Agg')
