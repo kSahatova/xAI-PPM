@@ -21,11 +21,9 @@ from sklearn.metrics import roc_auc_score
 from sklearn.pipeline import FeatureUnion
 from sklearn.preprocessing import MinMaxScaler
 #packages from https://github.com/irhete/predictive-monitoring-benchmark/blob/master/experiments/experiments.py
-# import EncoderFactory
-# from DatasetManager import DatasetManager
-from dataset_manager import DatasetManager
-#import models
-# from models.LLM import LLM
+import EncoderFactory
+from DatasetManager import DatasetManager
+
 # import xgboost as xgb
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -192,7 +190,7 @@ for dataset_name in datasets:
             print('Classifier', cls_method)
             print('Encoding', cls_encoding)
             # activity = dataset_name.split('_')[-1]
-            dataset_manager = DatasetManager(dataset_name, config)
+            dataset_manager = DatasetManager(dataset_name)
             data_dir = r'C:\Users\sahat\OneDrive - KU Leuven\Research\PPM&xAI\data\processed_benchmark_event_logs'
             # r'/data/leuven/365/vsc36567/xAI-PPM/data/processed_benchmark_event_logs' 
 

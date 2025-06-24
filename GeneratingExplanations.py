@@ -35,16 +35,12 @@ warnings.simplefilter('ignore')
 
 
 
-#Defining Basic parameters
+######################Defining Basic parameters##############################
 n_iter = 3
-method_name = 'single_agg'
-# method_name = 'prefix_index'
-cls_encoding = 'agg'
-# cls_encoding = 'index'
-cls_method = 'xgboost'
-#cls_method = 'logit'
-bucket_method = 'single'
-# bucket_method = 'prefix'
+method_name = 'single_agg' #'prefix_index'
+cls_encoding = 'agg' # 'index'
+cls_method = 'xgboost'  # 'logit'
+bucket_method = 'single'  # 'prefix'
 gap = 5
 train_ratio = 0.8
 n_splits = 3 #number of cv_folds
@@ -76,7 +72,7 @@ if not os.path.exists(params_dir):
   os.makedirs(os.path.join(params_dir))
 
 
-# hyperparameter Optimization objective function
+######################## Hyperparameter Optimization objective function #################################
 def create_and_evaluate_model(args):
     global trial_nr
     trial_nr += 1
@@ -106,7 +102,9 @@ def create_and_evaluate_model(args):
         test_y_all = []
         if "prefix" in method_name:
             scores = defaultdict(int)
+
         for bucket in set(bucket_assignments_test):
+
             relevant_train_cases_bucket = dataset_manager.get_indexes(df_train_prefixes)[
                 bucket_assignments_train == bucket]
             relevant_test_cases_bucket = dataset_manager.get_indexes(df_test_prefixes)[
@@ -180,7 +178,7 @@ def create_and_evaluate_model(args):
     return {'loss': -score / n_splits, 'status': STATUS_OK, 'model': cls}
 
 
-# code to find the best parameters
+################################ Code to find the best parameters ######################################
 for dataset_name in datasets:
     # the folders that contains the folds csv files
     folds_directory = os.path.join(artefacts_dir, 'folds_%s_%s_%s' % (dataset_name, cls_method, method_name))
@@ -206,6 +204,7 @@ for dataset_name in datasets:
     # splitting data into training and testing, then deleting the whole dataframe
     train, _ = dataset_manager.split_data_strict(df, train_ratio, split="temporal")
     del df
+
     # prepare chunks for cross-validation
     df_prefixes = []
     class_ratios = []
@@ -247,7 +246,7 @@ for dataset_name in datasets:
         pickle.dump(best_params, fout)
 
 
-# final experiments
+######################################### XAI final experiments ##########################################
 saved_artefacts = os.path.join(artefacts_dir, 'model_and_hdf5')
 if not os.path.exists(saved_artefacts):
     os.makedirs(os.path.join(saved_artefacts))
@@ -271,6 +270,8 @@ for dataset_name in datasets:
     with open(params_file, 'rb') as fin:
         args = pickle.load(fin)
     current_args = {}
+
+    ################################### Generate prefixes #############################################
     dm = DatasetManager(dataset_name)
     df = dm.read_dataset()
     cls_encoder_args_final = {'case_id_col': dm.case_id_col,

@@ -63,7 +63,7 @@ class DatasetManager:
             start_timestamps = start_timestamps.reindex(
                 np.random.permutation(start_timestamps.index)
             )
-        train_ids = list(start_timestamps[self.case_id_col])[
+        train_ids = list(start_timestamps[self.case_id])[
             : int(train_ratio * len(start_timestamps))
         ]
         train = data[data[self.case_id].isin(train_ids)].sort_values(
@@ -101,47 +101,47 @@ class DatasetManager:
     def split_data_discard(self, data, train_ratio, split="temporal"):
         # split into train and test using temporal split and discard events that overlap the periods
         data = data.sort_values(self.sorting_cols, ascending=True, kind="mergesort")
-        grouped = data.groupby(self.case_id_col)
-        start_timestamps = grouped[self.timestamp_col].min().reset_index()
+        grouped = data.groupby(self.case_id)
+        start_timestamps = grouped[self.timestamp].min().reset_index()
         start_timestamps = start_timestamps.sort_values(
-            self.timestamp_col, ascending=True, kind="mergesort"
+            self.timestamp, ascending=True, kind="mergesort"
         )
-        train_ids = list(start_timestamps[self.case_id_col])[
+        train_ids = list(start_timestamps[self.case_id])[
             : int(train_ratio * len(start_timestamps))
         ]
-        train = data[data[self.case_id_col].isin(train_ids)].sort_values(
+        train = data[data[self.case_id].isin(train_ids)].sort_values(
             self.sorting_cols, ascending=True, kind="mergesort"
         )
-        test = data[~data[self.case_id_col].isin(train_ids)].sort_values(
+        test = data[~data[self.case_id].isin(train_ids)].sort_values(
             self.sorting_cols, ascending=True, kind="mergesort"
         )
-        split_ts = test[self.timestamp_col].min()
-        overlapping_cases = train[train[self.timestamp_col] >= split_ts][
-            self.case_id_col
+        split_ts = test[self.timestamp].min()
+        overlapping_cases = train[train[self.timestamp] >= split_ts][
+            self.case_id
         ].unique()
-        train = train[~train[self.case_id_col].isin(overlapping_cases)]
+        train = train[~train[self.case_id].isin(overlapping_cases)]
         return (train, test)
 
     def split_val(self, data, val_ratio, split="random", seed=22):
         # split into train and test using temporal split
-        grouped = data.groupby(self.case_id_col)
-        start_timestamps = grouped[self.timestamp_col].min().reset_index()
+        grouped = data.groupby(self.case_id)
+        start_timestamps = grouped[self.timestamp].min().reset_index()
         if split == "temporal":
             start_timestamps = start_timestamps.sort_values(
-                self.timestamp_col, ascending=True, kind="mergesort"
+                self.timestamp, ascending=True, kind="mergesort"
             )
         elif split == "random":
             np.random.seed(seed)
             start_timestamps = start_timestamps.reindex(
                 np.random.permutation(start_timestamps.index)
             )
-        val_ids = list(start_timestamps[self.case_id_col])[
+        val_ids = list(start_timestamps[self.case_id])[
             -int(val_ratio * len(start_timestamps)) :
         ]
-        val = data[data[self.case_id_col].isin(val_ids)].sort_values(
+        val = data[data[self.case_id].isin(val_ids)].sort_values(
             self.sorting_cols, ascending=True, kind="mergesort"
         )
-        train = data[~data[self.case_id_col].isin(val_ids)].sort_values(
+        train = data[~data[self.case_id].isin(val_ids)].sort_values(
             self.sorting_cols, ascending=True, kind="mergesort"
         )
         return (train, val)
@@ -248,33 +248,3 @@ class DatasetManager:
             yield (current_train_names, current_test_names)
 
 
-class CVFoldsManager:
-    """Manages cross-validation splits with consistent indexing"""
-    
-    def __init__(self, n_splits: int = 3, random_state: int = 22):
-        self.n_splits = n_splits
-        self.random_state = random_state
-        
-    def create_cv_splits(self, dataset_manager: DatasetManager, train_data: pd.DataFrame) -> Tuple[List[pd.DataFrame], List[float]]:
-        """Create stratified CV splits and return prefixes with class ratios"""
-        dt_prefixes = []
-        class_ratios = []
-        
-        for train_chunk, test_chunk in dataset_manager.get_stratified_split_generator(
-            train_data, n_splits=self.n_splits
-        ):
-            class_ratios.append(dataset_manager.get_class_ratio(train_chunk))
-            dt_prefixes.append(test_chunk)
-            
-        return dt_prefixes, class_ratios
-    
-    def get_train_test_folds(self, dt_prefixes: List[pd.DataFrame], cv_iter: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Get train/test split for specific CV iteration"""
-        dt_test_prefixes = dt_prefixes[cv_iter]
-        dt_train_prefixes = pd.DataFrame()
-        
-        for cv_train_iter in range(self.n_splits):
-            if cv_train_iter != cv_iter:
-                dt_train_prefixes = pd.concat([dt_train_prefixes, dt_prefixes[cv_train_iter]], axis=0)
-                
-        return dt_train_prefixes, dt_test_prefixes

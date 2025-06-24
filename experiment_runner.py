@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from typing import List, Dict
+from typing import List, Dict, Any, Tuple
 
 from abc import ABC, abstractmethod
 from sklearn.pipeline import FeatureUnion
@@ -11,23 +11,29 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.metrics import roc_auc_score
 
+import hyperopt
+from hyperopt import fmin, tpe, hp, Trials, STATUS_OK
+from hyperopt.pyll.base import scope
+
+from functools import partial
+
 import xgboost as xgb
 
-from dataset_manager_optimized import DatasetManager, CVFoldsManager
+from dataset_manager_optimized import DatasetManager
 from preprocessing.encoding import get_encoder
 from preprocessing.bucketing import get_bucketer
 
 
-class AbstarctExperimentRunner(ABC):
+class AbstractExperimentRunner(ABC):
     def __init__(
         self,
         dataset_name: str,
         dataset_manager: DatasetManager,
-        bucket_method: str,
-        encoding_methods: List[str],
-        encoding_args: Dict[str, any],
-        cls_method: str,
-        cls_args: Dict,
+        bucket_method: str = 'single',
+        encoding_methods: List[str] = ['static', 'agg'],
+        encoding_args: Dict[str, Any] = {},
+        cls_method: str = 'xgboost',
+        cls_args: Dict = {},
         random_state: int = 22,
     ):
         self.dataset_name = dataset_name
@@ -46,35 +52,13 @@ class AbstarctExperimentRunner(ABC):
 
     def preprocess_event_log(
         self,
-        data: pd.DataFrame,
-        train_ratio: int = 0.8,
+        train: pd.DataFrame,
+        test: pd.DataFrame,
         min_prefix_length: int = 1,
         max_prefix_length: int = 20,
         gap: int = 1,
     ):
-        """Preprocess a single dataset with proper train/test split and bucketing"""
-
-        dataset_results = {"train": {}, "test": {}}
-
-        # Splitting the data into train and test set
-        train, test = self.dm.split_data_strict(
-            data, train_ratio=train_ratio, split="temporal"
-        )
-        print(
-            "Shape of the train set: ",
-            train.shape,
-            "\nShape of the test set: ",
-            test.shape,
-        )
-
-        # Generate train and test prefixes
-        # Calculate max prefix length
-        max_prefix_length = min(
-            max_prefix_length, self.dm.get_pos_case_length_quantile(data, 0.90)
-        )
-        print(
-            f"\nGenerating train and test prefixes with the max length {max_prefix_length}"
-        )
+        """Preprocess a single dataset with the specified bucketing and encoding"""
 
         df_train_prefixes = self.dm.generate_prefix_data(
             train, min_prefix_length, max_prefix_length, gap=gap
@@ -87,11 +71,12 @@ class AbstarctExperimentRunner(ABC):
 
         # Create buckets
         print(f'\nCreating buckets with the "{self.bucket_method}" bucket method')
-        train_bucket_labels = self.bucketer.fit_predict(df_train_prefixes)
-        test_bucket_labels = self.bucketer.predict(df_test_prefixes)
+        train_bucket_labels = self.bucketer.fit_predict(df_train_prefixes) # type: ignore
+        test_bucket_labels = self.bucketer.predict(df_test_prefixes) # type: ignore
 
         # Process each bucket (merge all possible buckets)
         unique_buckets = set(train_bucket_labels) | set(test_bucket_labels)
+        dataset_results = {"train": {}, "test": {}}
 
         for bucket_id in unique_buckets:
             print(f"    Processing bucket: {bucket_id}")
@@ -165,13 +150,11 @@ class AbstarctExperimentRunner(ABC):
             dataset_results["train"][bucket_key] = {
                 "features": pd.DataFrame(encoded_train_bucket, columns=feature_names),
                 "labels": train_y,
-                # 'raw_data': df_train_bucket
             }
 
             dataset_results["test"][bucket_key] = {
                 "features": pd.DataFrame(encoded_test_bucket, columns=feature_names),
                 "labels": test_y,
-                # 'raw_data': df_test_bucket
             }
 
             print(f"    Finished processing bucket: {bucket_id}")
@@ -179,39 +162,29 @@ class AbstarctExperimentRunner(ABC):
         return dataset_results
 
     @abstractmethod
-    def run_experiment(self):
+    def run_experiment(self, *args, **kwargs):
         raise NotImplementedError(
             "Method self.run_experiment() has not been implemented for this class"
         )
 
 
-class MLExperimentRunner(AbstarctExperimentRunner):
+class MLExperimentRunner(AbstractExperimentRunner):
     """Main experiment orchestrator combining all components"""
 
     def __init__(
         self,
         dataset_name: str,
         dataset_manager: DatasetManager,
-        bucket_method: str,
-        encoding_methods: List[str],
-        encoding_args: Dict[str, any],
-        cls_method: str,
-        cls_args: Dict,
+        bucket_method: str = 'single',
+        encoding_methods: List[str] = ['static', 'agg'],
+        encoding_args: Dict[str, Any] = {},
+        cls_method: str = 'xgboost',
+        cls_args: Dict = {},
         random_state: int = 22,
     ):
-        self.dataset_name = dataset_name
-        self.dm = dataset_manager
-
-        self.bucket_method = bucket_method
-        self.encoding_methods = encoding_methods
-        self.encoding_args = encoding_args
-
-        self.cls_method = cls_method
-        self.cls_args = cls_args
-        self.random_state = random_state
-
-        # Initialize components
-        self.bucketer = get_bucketer(self.bucket_method, case_id_col=self.dm.case_id)
+        super().__init__(dataset_name, dataset_manager, bucket_method, 
+                         encoding_methods, encoding_args, cls_method,
+                         cls_args, random_state)
 
     def create_classifier(self):
         """Factory method for creating classifiers"""
@@ -222,7 +195,7 @@ class MLExperimentRunner(AbstarctExperimentRunner):
                 n_estimators=args["n_estimators"],
                 max_features=args["max_features"],
                 random_state=self.random_state,
-                verbose=1
+                verbose=False
             )
         elif self.cls_method == "xgboost":
             return xgb.XGBClassifier(
@@ -234,7 +207,7 @@ class MLExperimentRunner(AbstarctExperimentRunner):
                 colsample_bytree=args["colsample_bytree"],
                 min_child_weight=int(args["min_child_weight"]),
                 seed=self.random_state,
-                verbose=1
+                verbose=False
             )
         elif self.cls_method == "logit":
             return LogisticRegression(C=2 ** args["C"], random_state=self.random_state, verbose=1)
@@ -243,33 +216,32 @@ class MLExperimentRunner(AbstarctExperimentRunner):
                 C=2 ** args["C"],
                 gamma=2 ** args["gamma"],
                 random_state=self.random_state,
-                verbose=1
+                verbose=False
             )
+        else:
+            raise ValueError(f"Unknown classifier method: {self.cls_method}")
 
-    def run_experiment(
-        self, encoded_train: Dict, encoded_test: Dict, phase: str = "offline"
-    ):
-        # TODO: add online prediction
+    def run_experiment(self, train_data, test_data):
 
-        trained_classifiers = {}
+        # trained_classifiers = {}
         result = {}
 
         # TODO: Optimize!
-        for train_bucket_id, test_bucket_id in zip(encoded_train, encoded_test):
-            encoded_train_X = encoded_train[train_bucket_id]["features"]
-            train_y = encoded_train[train_bucket_id]["labels"]
+        for train_bucket_id, test_bucket_id in zip(train_data, test_data):
+            train_data_X = train_data[train_bucket_id]["features"]
+            train_y = train_data[train_bucket_id]["labels"]
 
-            encoded_test_X = encoded_test[test_bucket_id]["features"]
-            test_y = encoded_test[test_bucket_id]["labels"]
+            test_data_X = test_data[test_bucket_id]["features"]
+            test_y = test_data[test_bucket_id]["labels"]
 
             classifier = self.create_classifier()
             print(f"***Fitting the created {classifier.__class__.__name__} classifier***")
-            classifier.fit(encoded_train_X, train_y)
+            classifier.fit(train_data_X, train_y)
 
             print("\n***Estimating the fitted classifier***")
             # predictions
             preds_pos_label_idx = np.where(classifier.classes_ == 1)[0][0]
-            preds = classifier.predict_proba(encoded_test_X)[:, preds_pos_label_idx]
+            preds = classifier.predict_proba(test_data_X)[:, preds_pos_label_idx]
 
             # TODO: Change ROC-AUC calculation for the bucketing method with multiple buckets
             # auc total
@@ -280,55 +252,156 @@ class MLExperimentRunner(AbstarctExperimentRunner):
             # result[test_bucket_id]["model"] = classifier
 
         return result
+    
 
+class CrossValidationExperimentRunner(AbstractExperimentRunner):
+    """
+    Execution logic of this class includes (i) the extraction of hold out folds from the training data;
+    (ii) instantiation of a new model, (iii) training of the model and estimation on the k-th fold.
+    """
+    def __init__(self, dataset_name: str,
+                dataset_manager: DatasetManager,
+                bucket_method: str,
+                encoding_methods: List[str],
+                encoding_args: Dict[str, Any],
+                cls_method: str,
+                cls_args: Dict,
+                random_state: int = 22,
+                k_folds: int = 3):
+        super().__init__(dataset_name, dataset_manager, bucket_method, 
+                        encoding_methods, encoding_args, cls_method,
+                        cls_args, random_state)
+        self.k_folds = k_folds
 
-"""def run_cross_validation_experiment(self, args: Dict, n_splits: int = 3) -> Dict:
-        Run complete CV experiment with timing
-        # Load and prepare data
-        data = self.dataset_manager.read_dataset()
-        train, _ = self.dataset_manager.split_data_strict(data, 0.8, split="temporal")
+    def get_cv_folds(self, data: pd.DataFrame,
+                        min_prefix_length: int = 1,
+                        max_prefix_length: int = 20,
+                        gap: int = 1,
+                        ):
+        df_prefixes = []
+        class_ratios = []
+        for train_chunk, test_chunk in self.dm.get_stratified_split_generator(data, n_splits=self.k_folds):
+            class_ratios.append(self.dm.get_class_ratio(train_chunk))            
+            df_prefixes.append(
+                self.dm.generate_prefix_data(test_chunk, min_prefix_length, max_prefix_length, gap=gap))
+        del data
+
+        for cv_iter in range(self.k_folds):
+            test_fold = df_prefixes[cv_iter]
+            train_fold = pd.concat([df_prefixes[i] for i in range(self.k_folds) if i != cv_iter], axis=0)
+            yield train_fold, test_fold
+
+    def preprocess_fold(self, train_prefixes, test_prefixes):
+
+        # Get labels
+        _, y_train = self.dm.get_labels(train_prefixes)
+        _, y_test = self.dm.get_labels(test_prefixes)
+
+        print(
+            "       Shape of the train prefixes and labels after labels extraction: ",
+            train_prefixes.shape, y_train.shape,
+        )
+        print(
+            "       Shape of the test prefixes and labels after labels extraction: ",
+            test_prefixes.shape, y_test.shape,)
+
+        self.feature_combiner = FeatureUnion([
+            (method, get_encoder(method, **self.encoding_args))
+            for method in self.encoding_methods
+        ])
+
+        # Fit on training data and transform both sets
+        encoded_train_X = self.feature_combiner.fit_transform(train_prefixes)
+        encoded_test_X = self.feature_combiner.transform(test_prefixes)
+
+        print(
+            "\n       Shape of the train bucket after encoding: ", encoded_train_X.shape)
+        print(
+            "       Shape of the test bucket after encoding: ", encoded_test_X.shape)
+
+        # Get feature names
+        feature_names = []
+        for name, transformer in self.feature_combiner.transformer_list:
+            if hasattr(transformer, "get_feature_names"):
+                for fname in transformer.get_feature_names():
+                    feature_names.append(f"{name}_{fname}")
         
-        # Generate prefix data for CV
-        prefix_generator = PrefixGenerator(self.dataset_manager, random_state=self.random_state)
+        X_train = pd.DataFrame(encoded_train_X, columns=feature_names) 
+        X_test = pd.DataFrame(encoded_test_X, columns=feature_names) 
+        return X_train, y_train, X_test, y_test
         
-        # Create CV splits
-        dt_prefixes_raw, class_ratios = self.cv_manager.create_cv_splits(self.dataset_manager, train)
-        
-        # Generate prefixes for each split
-        dt_prefixes = []
-        for split_data in dt_prefixes_raw:
-            prefixes = prefix_generator.generate_prefixes(split_data, self.dataset_name)
-            dt_prefixes.append(prefixes)
-        
-        total_score = 0
-        scores_per_bucket = defaultdict(int) if "prefix" in f"{self.bucket_method}_{self.cls_encoding}" else None
-        
-        # Run CV iterations
-        for cv_iter in range(n_splits):
-            dt_train_prefixes, dt_test_prefixes = self.cv_manager.get_train_test_split(dt_prefixes, cv_iter)
-            
-            # Create and fit bucketer
-            bucketer_kwargs = {}
-            if self.bucket_method == "cluster":
-                bucketer_kwargs["n_clusters"] = args["n_clusters"]
-            
-            bucketer = self.bucketing_manager.create_bucketer(**bucketer_kwargs)
-            bucket_assignments_train = bucketer.fit_predict(dt_train_prefixes)
-            bucket_assignments_test = bucketer.predict(dt_test_prefixes)
-            
-            # Process each bucket
-            preds_all, test_y_all = self._process_buckets(
-                dt_train_prefixes, dt_test_prefixes,
-                bucket_assignments_train, bucket_assignments_test,
-                class_ratios[cv_iter], args, scores_per_bucket
+    def create_classifier(self, args):
+        """Factory method for creating classifiers"""
+
+        if self.cls_method == "rf":
+            return RandomForestClassifier(
+                n_estimators=500,
+                max_features=args["max_features"],
+                random_state=self.random_state,
+                verbose=False
             )
-            
-            # Calculate score for this CV iteration
-            from sklearn.metrics import roc_auc_score
-            total_score += roc_auc_score(test_y_all, preds_all)
+        elif self.cls_method == "xgboost":
+            return xgb.XGBClassifier(
+                objective="binary:logistic",
+                n_estimators=args["n_estimators"],
+                learning_rate=args["learning_rate"],
+                subsample=args["subsample"],
+                max_depth=int(args["max_depth"]),
+                colsample_bytree=args["colsample_bytree"],
+                min_child_weight=int(args["min_child_weight"]),
+                seed=self.random_state,
+                verbose=False
+            )
+        elif self.cls_method == "logit":
+            return LogisticRegression(C=2 ** args["C"], random_state=self.random_state, verbose=1)
+        elif self.cls_method == "svm":
+            return SVC(
+                C=2 ** args["C"],
+                gamma=2 ** args["gamma"],
+                random_state=self.random_state,
+                verbose=False
+            )
+        else:
+            raise ValueError(f"Unknown classifier method: {self.cls_method}")
         
-        return {
-            'score': total_score / n_splits,
-            'bucket_scores': scores_per_bucket
-        }
-"""
+    def create_objective(self, data, 
+                    min_prefix_length,
+                    max_prefix_length, 
+                    gap, args):
+        score = 0
+        prefixes_generator = self.get_cv_folds(data, min_prefix_length, max_prefix_length, gap)
+        for i, (train_prefixes, test_prefixes) in enumerate(prefixes_generator):
+            print(f"Started processing the fold {i}")
+            X_train, y_train, X_test, y_test = self.preprocess_fold(train_prefixes, test_prefixes)
+            classifier = self.create_classifier(args)
+            classifier.fit(X_train, y_train)
+            preds_pos_label_idx = np.where(classifier.classes_ == 1)[0][0]
+            preds = classifier.predict_proba(X_test)[:,preds_pos_label_idx]
+
+            score += roc_auc_score(y_test, preds)
+            
+        return {'loss': -score / self.k_folds, 'status': STATUS_OK}
+    
+
+    def run_experiment(self, train_data: pd.DataFrame, min_prefix_length, max_prefix_length, gap):
+        objective_fn = partial(self.create_objective, train_data, 
+                               min_prefix_length, max_prefix_length, gap)
+
+        space = {}
+        if self.cls_method == "xgboost":
+            space = {'learning_rate': hp.uniform("learning_rate", 0, 1),
+                'subsample': hp.uniform("subsample", 0.5, 1),
+                'max_depth': scope.int(hp.quniform('max_depth', 4, 30, 1)),
+                'colsample_bytree': hp.uniform("colsample_bytree", 0.5, 1),
+                'min_child_weight': scope.int(hp.quniform('min_child_weight', 1, 6, 1))}
+      
+        elif self.cls_method == "rf":
+            space = {'max_features': hp.uniform('max_features', 0, 1)}
+
+        elif self.cls_method == "lr":
+            space = {'C': hp.uniform('C', -15, 15)}
+
+        trials = Trials()
+        best = fmin(objective_fn, space, algo=tpe.suggest, max_evals=4, trials=trials)
+        print("The best parameters observed: \n", hyperopt.space_eval(space, best))
+        return best, trials

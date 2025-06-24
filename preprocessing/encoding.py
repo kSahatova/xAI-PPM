@@ -49,8 +49,7 @@ def get_encoder(
             fillna=fillna,
         )
     else:
-        print("Invalid encoder type")
-        return None
+        raise ValueError("Invalid encoder type")
 
 
 class StaticTransformer(TransformerMixin):
