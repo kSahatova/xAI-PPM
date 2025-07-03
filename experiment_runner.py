@@ -195,7 +195,7 @@ class MLExperimentRunner(AbstractExperimentRunner):
                 n_estimators=args["n_estimators"],
                 max_features=args["max_features"],
                 random_state=self.random_state,
-                verbose=False
+                verbose=True
             )
         elif self.cls_method == "xgboost":
             return xgb.XGBClassifier(
@@ -207,7 +207,7 @@ class MLExperimentRunner(AbstractExperimentRunner):
                 colsample_bytree=args["colsample_bytree"],
                 min_child_weight=int(args["min_child_weight"]),
                 seed=self.random_state,
-                verbose=False
+                verbose=True
             )
         elif self.cls_method == "logit":
             return LogisticRegression(C=2 ** args["C"], random_state=self.random_state, verbose=1)
@@ -216,7 +216,7 @@ class MLExperimentRunner(AbstractExperimentRunner):
                 C=2 ** args["C"],
                 gamma=2 ** args["gamma"],
                 random_state=self.random_state,
-                verbose=False
+                verbose=True
             )
         else:
             raise ValueError(f"Unknown classifier method: {self.cls_method}")
@@ -292,7 +292,7 @@ class CrossValidationExperimentRunner(AbstractExperimentRunner):
             yield train_fold, test_fold
 
     def preprocess_fold(self, train_prefixes, test_prefixes):
-
+        # TODO: Check the shape of features and labels
         # Get labels
         _, y_train = self.dm.get_labels(train_prefixes)
         _, y_test = self.dm.get_labels(test_prefixes)
@@ -338,7 +338,7 @@ class CrossValidationExperimentRunner(AbstractExperimentRunner):
                 n_estimators=500,
                 max_features=args["max_features"],
                 random_state=self.random_state,
-                verbose=False
+                verbose=True
             )
         elif self.cls_method == "xgboost":
             return xgb.XGBClassifier(
@@ -350,7 +350,7 @@ class CrossValidationExperimentRunner(AbstractExperimentRunner):
                 colsample_bytree=args["colsample_bytree"],
                 min_child_weight=int(args["min_child_weight"]),
                 seed=self.random_state,
-                verbose=False
+                verbose=True
             )
         elif self.cls_method == "logit":
             return LogisticRegression(C=2 ** args["C"], random_state=self.random_state, verbose=1)
@@ -359,7 +359,7 @@ class CrossValidationExperimentRunner(AbstractExperimentRunner):
                 C=2 ** args["C"],
                 gamma=2 ** args["gamma"],
                 random_state=self.random_state,
-                verbose=False
+                verbose=True
             )
         else:
             raise ValueError(f"Unknown classifier method: {self.cls_method}")

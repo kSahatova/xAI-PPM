@@ -146,44 +146,63 @@ class DatasetManager:
         )
         return (train, val)
 
+    # def generate_prefix_data(self, data, min_length, max_length, gap=1):
+    #     # generate prefix data (each possible prefix becomes a trace)
+    #     data["case_length"] = data.groupby(self.case_id)[self.activity].transform('count')
+
+    #     # Filter out cases that do not meet minimum length requirement
+    #     valid_mask = data['case_length'] >= min_length
+
+    #     prefix_lengths = list(range(min_length + gap, max_length + 1, gap))
+    #     prefix_dataframes = []
+
+    #     for prefix_length  in tqdm(prefix_lengths, desc="Generating prefixes"):
+    #         # Use boolean indexing without copy for filtering
+    #         eligible_mask = valid_mask & (data['case_length'] >= prefix_length)
+    #         if not eligible_mask.any():
+    #             continue
+
+    #         prefix_data = (data[eligible_mask]
+    #                   .groupby(self.case_id, group_keys=False)
+    #                   .head(prefix_length)
+    #                   .copy())  # Only copy the small result
+
+    #         # Add metadata columns
+    #         prefix_data["prefix_nr"] = prefix_length 
+    #         prefix_data['orig_case_id'] = prefix_data[self.case_id]
+
+    #         prefix_data[self.case_id] = (prefix_data[self.case_id].astype(str) + 
+    #                                    '_' + str(prefix_length))
+
+    #         prefix_dataframes.append(prefix_data)
+        
+    #     # Clean up the added column to restore original state
+    #     data.drop('case_length', axis=1, inplace=True)
+        
+    #     if prefix_dataframes:
+    #         return pd.concat(prefix_dataframes, axis=0, ignore_index=True)
+        
+    #     return pd.DataFrame()
+
     def generate_prefix_data(self, data, min_length, max_length, gap=1):
-        # generate prefix data (each possible prefix becomes a trace)
-        data["case_length"] = data.groupby(self.case_id)[self.activity].transform('count')
-
-
-        # Filter out cases that do not meet minimum length requirement
-        valid_mask = data['case_length'] >= min_length
-
-        prefix_lengths = list(range(min_length + gap, max_length + 1, gap))
-        prefix_dataframes = []
-
-        for prefix_length  in tqdm(prefix_lengths, desc="Generating prefixes"):
-            # Use boolean indexing without copy for filtering
-            eligible_mask = valid_mask & (data['case_length'] >= prefix_length)
-            if not eligible_mask.any():
-                continue
-
-            prefix_data = (data[eligible_mask]
-                      .groupby(self.case_id, group_keys=False)
-                      .head(prefix_length)
-                      .copy())  # Only copy the small result
-
-            # Add metadata columns
-            prefix_data["prefix_nr"] = prefix_length 
-            prefix_data['orig_case_id'] = prefix_data[self.case_id]
-
-            prefix_data[self.case_id] = (prefix_data[self.case_id].astype(str) + 
-                                       '_' + str(prefix_length))
-
-            prefix_dataframes.append(prefix_data)
-        
-        # Clean up the added column to restore original state
-        data.drop('case_length', axis=1, inplace=True)
-        
-        if prefix_dataframes:
-            return pd.concat(prefix_dataframes, axis=0, ignore_index=True)
-        
-        return pd.DataFrame()
+        # getting the length of each process instance
+        data['case_length'] = data.groupby(self.case_id)[self.activity].transform(len)
+        # getting instances which are longer than the minimum length and getting amount of data equivalent to the min length
+        dt_prefixes = data[data['case_length'] >= min_length].groupby(self.case_id).head(min_length)
+        # this is the first prefixed chunk
+        dt_prefixes['prefix_nr'] = 1
+        # keeping the original case id with each case
+        dt_prefixes['original_case_id'] = dt_prefixes[self.case_id]
+        # prefix-based bucketing requires certain nr_events
+        # repeat the previous process while increasing the prefixed data bz the gap everytime
+        for nr_events in range(min_length + gap, max_length + 1, gap):
+            tmp = data[data['case_length'] >= nr_events].groupby(self.case_id).head(nr_events)
+            tmp['original_case_id'] = tmp[self.case_id]
+            tmp[self.case_id] = tmp[self.case_id].apply(lambda x: '%s_%s' % (x, nr_events))
+            tmp['prefix_nr'] = nr_events
+            dt_prefixes = pd.concat([dt_prefixes, tmp], axis=0)
+        dt_prefixes['case_length'] = dt_prefixes['case_length'].apply(lambda x: min(max_length, x))
+        return dt_prefixes
 
     def get_indexes(self, data: pd.DataFrame) -> pd.Index:
         """
@@ -208,6 +227,11 @@ class DatasetManager:
         # numeric_labels = np.asarray([1 if label == self.pos_label else 0 for label in labels])
         numeric_labels = (labels == self.pos_label).astype(int).values
         return labels, numeric_labels
+    
+    def get_label_numeric(self, data):
+        # get the label of the first row in a process instance, as they are grouped
+        y = data.groupby(self.case_id).first()[self.label]
+        return [1 if label == self.pos_label else 0 for label in y]
 
     def get_class_ratio(self, data):
         class_freqs = data[self.label].value_counts()
