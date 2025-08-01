@@ -6,7 +6,7 @@ from easydict import EasyDict as edict
 
 from sklearn.model_selection import StratifiedKFold
 
-from dataset_column_schema import DatasetColumnSchema
+from xai_ppm.dataset_column_schema import DatasetColumnSchema
 
 
 class DatasetManager:

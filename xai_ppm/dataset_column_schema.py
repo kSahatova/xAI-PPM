@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import List, Dict, Any
 import pandas as pd
 
 
@@ -81,7 +81,7 @@ class DatasetColumnSchema:
             self.label_col,
         ]
 
-    def validate_dataframe(self, df: pd.DataFrame) -> Dict[str, List[str]]:
+    def validate_dataframe(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
         Validate that a dataframe contains the expected columns
         Returns a dictionary with missing and extra columns
@@ -98,7 +98,7 @@ class DatasetColumnSchema:
             "is_valid": len(missing_cols) == 0,
         }
 
-    def get_encoder_args(self, fillna: bool = True) -> Dict[str, any]:
+    def get_encoder_args(self, fillna: bool = True) -> Dict[str, Any]:
         """Get arguments for encoder initialization"""
         return {
             "case_id_col": self.case_id_col,
@@ -140,23 +140,7 @@ class DatasetColumnSchema:
             if column_name in col_list:
                 col_list.remove(column_name)
 
-    # def get_column_info(self) -> Dict[str, Dict[str, any]]:
-    #     """Get comprehensive information about all columns"""
-    #     info = {}
-
-    #     for col_type in ColumnType:
-    #         columns = self.get_columns_by_type(col_type)
-    #         for col in columns:
-    #             info[col] = {
-    #                 'type': col_type.value,
-    #                 'is_static': col_type.value.startswith('static') or col in self.core_cols,
-    #                 'is_categorical': 'categorical' in col_type.value or col_type in [ColumnType.CASE_ID, ColumnType.ACTIVITY, ColumnType.RESOURCE],
-    #                 'is_core': col in self.core_cols
-    #             }
-
-    #     return info
-
-    def to_dict(self) -> Dict[str, any]:
+    def to_dict(self) -> Dict[str, Any]:
         """Convert schema to dictionary for serialization"""
         return {
             "case_id_col": self.case_id_col,
@@ -164,8 +148,8 @@ class DatasetColumnSchema:
             "resource_col": self.resource_col,
             "timestamp_col": self.timestamp_col,
             "label_col": self.label_col,
-            "pos_label": self.pos_label,
-            "neg_label": self.neg_label,
+            "pos_label": self.pos_label_col,
+            "neg_label": self.neg_label_col,
             "dynamic_cat_cols": self.dynamic_cat_cols.copy(),
             "static_cat_cols": self.static_cat_cols.copy(),
             "dynamic_num_cols": self.dynamic_num_cols.copy(),
@@ -173,7 +157,7 @@ class DatasetColumnSchema:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, any]) -> "DatasetColumnSchema":
+    def from_dict(cls, data: Dict[str, Any]) -> "DatasetColumnSchema":
         """Create schema from dictionary"""
         return cls(**data)
 
@@ -185,7 +169,7 @@ class DatasetColumnSchema:
                     Activity: {self.activity_col}
                     Resource: {self.resource_col}
                     Timestamp: {self.timestamp_col}
-                    Label: {self.label_col} (pos: {self.pos_label}, neg: {self.neg_label})
+                    Label: {self.label_col} (pos: {self.pos_label_col}, neg: {self.neg_label_col})
                 
                 Static Columns:
                     Categorical ({len(self.static_cat_cols)}): {self.static_cat_cols}
@@ -240,41 +224,3 @@ class DatasetSchemas:
             ],
             static_num_cols=["RequestedAmount"],
         )
-
-
-"""
-# Usage examples:
-if __name__ == "__main__":
-    # Create default schema
-    schema = DatasetColumnSchema()
-    print(schema)
-    print("\n" + "="*50 + "\n")
-    
-    # Create schema with custom columns
-    custom_schema = DatasetColumnSchema(
-        case_id_col="CaseID",
-        activity_col="Task",
-        static_cat_cols=['Department', 'Priority'],
-        dynamic_num_cols=['Duration', 'Cost']
-    )
-    
-    # Get encoder arguments
-    encoder_args = schema.get_encoder_args()
-    print("Encoder arguments:", encoder_args)
-    print("\n" + "="*50 + "\n")
-    
-    # Validate a sample dataframe
-    sample_df = pd.DataFrame({
-        'Case ID': [1, 1, 2],
-        'Activity': ['A', 'B', 'A'],
-        'time:timestamp': pd.to_datetime(['2023-01-01', '2023-01-02', '2023-01-01']),
-        'label': ['regular', 'regular', 'deviant']
-    })
-    
-    validation_result = schema.validate_dataframe(sample_df)
-    print("Validation result:", validation_result)
-    
-    # Get column information
-    column_info = schema.get_column_info()
-    for col, info in list(column_info.items())[:5]:  # Show first 5
-        print(f"{col}: {info}")"""

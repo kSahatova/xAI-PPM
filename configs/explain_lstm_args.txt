@@ -1,0 +1,11 @@
+--dataset=BPI17
+--project_name=explain_lstm_bpic2017
+--device=cpu
+--backbone=rnn
+--rnn_type=lstm
+--embedding_size=16  
+--hidden_size=32  
+--n_layers=1  
+--batch_size=1 
+--strategy=concat
+--checkpoint_path=D:/PycharmProjects/xAI-PPM/persisted_models/suffix/BPI17_lstm_25epochs_num_features_preserved.pth

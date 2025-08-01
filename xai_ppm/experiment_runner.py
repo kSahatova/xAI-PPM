@@ -19,7 +19,7 @@ from functools import partial
 
 import xgboost as xgb
 
-from dataset_manager_optimized import DatasetManager
+from xai_ppm.dataset_manager_opt import DatasetManager
 from preprocessing.encoding import get_encoder
 from preprocessing.bucketing import get_bucketer
 

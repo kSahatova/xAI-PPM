@@ -1,9 +1,5 @@
 # *Project*
 
-The project is dedicated to estimating the quality of SHAP values applied for processes.   
+The project is dedicated for estimating the quality of SHAP values applied on event log data.   
 
-# *Data*
-
-The BPIC2017 dataset prepared for encoding can be fetched using the following link:
-https://kuleuven-my.sharepoint.com/:f:/g/personal/kseniya_sahatova_kuleuven_be/Ejln5nr-kKVDtiAmPPrRfO0BJP7wXV9_ZAYimxkLnZmk4w
 
