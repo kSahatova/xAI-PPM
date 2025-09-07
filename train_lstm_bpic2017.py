@@ -120,12 +120,21 @@ def parse_args():
     parser.add_argument("--categorical_features", nargs="+", default=["activity"])
     parser.add_argument("--categorical_targets", nargs="+", default=["activity"])
     parser.add_argument("--continuous_features", nargs="+", default="all")
-    parser.add_argument("--continuous_targets", nargs="+", default=["remaining_time"])
+    parser.add_argument("--continuous_targets", nargs="+", default=None)
 
     """ in layer config """
     parser.add_argument(
         "--strategy", type=str, default="sum", choices=["sum", "concat"]
     )
+    parser.add_argument(
+        "--pos_encoding_form", type=str, default="dummy", 
+        choices=["sinusoidal", "learnable", "random", "dummy"]
+    )
+    parser.add_argument(
+        "--pos_encoding_strategy", type=str, default="sum", choices=["sum", "concat"]
+    )
+
+
 
     """ model config """
     parser.add_argument(
@@ -258,6 +267,8 @@ def get_model_config(train_log: EventLog, training_config: dict):
         "numerical_targets": train_log.targets.numerical,
         "padding_idx": train_log.special_tokens["<PAD>"],
         "strategy": training_config["strategy"],
+        "pos_encoding_form": training_config["pos_encoding_form"],
+        "pos_encoding_strategy": training_config["pos_encoding_strategy"],
         "backbone_name": backbone_hf_name,
         "backbone_pretrained": True if pretrained_config else False,
         "backbone_finetuning": pretrained_config.get("fine_tuning", None),
@@ -266,7 +277,6 @@ def get_model_config(train_log: EventLog, training_config: dict):
         "backbone_n_layers": training_config.get("n_layers", None),
         "device": training_config["device"],
     }
-
 
 
 def main(training_config: dict):
@@ -441,6 +451,8 @@ if __name__ == "__main__":
         "categorical_targets": args.categorical_targets,
         "continuous_targets": args.continuous_targets,
         "strategy": args.strategy,
+        "pos_encoding_form": args.pos_encoding_form,
+        "pos_encoding_strategy": args.pos_encoding_strategy,
         # "total_params": all_param,
         # "trainable_params": trainable_params,
     }
