@@ -1,6 +1,12 @@
+from regex import E
 import torch
 from torch import nn
 from torch.nn import functional as F
+
+from .positional_encoding import (
+    SinusoidalPositionEncoder, LearnablePositionEncoder,
+    RandomPositionalEncoder, DummyPositionEncoder
+)
 
 
 class InLayer(nn.Module):
@@ -11,6 +17,8 @@ class InLayer(nn.Module):
         numerical_cols: list[str] = [],
         embedding_size: int = 768,
         strategy: str = "concat",
+        pos_encoding_form: str = "sinusoidal",
+        pos_encoding_strategy: str = "sum",
         padding_idx: int = 0,
     ):
         assert len(categorical_cols) == len(categorical_sizes)
@@ -23,15 +31,21 @@ class InLayer(nn.Module):
         self.numerical_cols = numerical_cols
         self.padding_idx = padding_idx
         self.strategy = strategy
+        self.pos_encoding_form = pos_encoding_form
+        self.pos_encoding_strategy = pos_encoding_strategy
 
         self.total_features = len(categorical_cols) + len(numerical_cols)
 
-        if strategy == "concat":
-            in_embedding_size = embedding_size // 2
-        elif strategy == "sum":
-            in_embedding_size = embedding_size
-        else:
-            raise ValueError("Invalid strategy")
+        in_embedding_size = embed_layer_size = 0
+        if strategy not in ["concat", "sum"]:
+            raise ValueError(f"Invalid strategy '{strategy}'. Must be 'concat' or 'sum'.")
+
+        if pos_encoding_strategy not in ["concat", "sum"]:
+            raise ValueError(f"Invalid pos_encoding_strategy '{pos_encoding_strategy}'. Must be 'concat' or 'sum'.")
+        
+        in_embedding_size = embedding_size // 2 if strategy == "concat" else embedding_size
+        embed_layer_size = (in_embedding_size // 2 if pos_encoding_strategy == "concat" 
+                            else in_embedding_size)
 
         # assert embedding size is divisible by the number of features
         # assert embedding_size % self.total_features == 0, "Embedding size must be divisible by the number of features"
@@ -39,12 +53,25 @@ class InLayer(nn.Module):
         for col in categorical_cols:
             self.embedding_layers[col] = nn.Embedding(
                 categorical_sizes[col],
-                in_embedding_size,
+                embed_layer_size,
                 padding_idx=padding_idx,
             )
 
         if len(numerical_cols) > 0:
             self.continuous_layer = nn.Linear(len(numerical_cols), in_embedding_size)
+
+        # positional encoding
+        if pos_encoding_form == "sinusoidal":
+            self.position_encoder = SinusoidalPositionEncoder(embed_layer_size)
+        # TODO : adjust learnable and random encodings properly (max_length)
+        elif pos_encoding_form == "learnable":
+            self.position_encoder = LearnablePositionEncoder(embed_layer_size, max_length=2048)
+        elif pos_encoding_form == "random":
+            self.position_encoder = RandomPositionalEncoder(embed_layer_size, max_length=2048)
+        elif pos_encoding_form == "dummy":
+            self.position_encoder = DummyPositionEncoder()
+        else:
+            raise ValueError(f"Invalid pos_encoding_form '{pos_encoding_form}'. Must be 'sinusoidal', 'learnable', 'random' or 'dummy'.")
 
         self.layer_norm = nn.LayerNorm(embedding_size)
         self.init_params()
@@ -55,9 +82,20 @@ class InLayer(nn.Module):
         embedded_features = []
         for ix, name in enumerate(self.categorical_cols):
             # since we use OrderedDict, we can access the embedding layer by index
-            embed = self.embedding_layers[name](cat_x[..., ix])
-            embedded_features.append(embed)
+            embedded = self.embedding_layers[name](cat_x[..., ix])
+            # embedded_features.append(embed)
 
+            # add positional encoding
+            pos_encoded = self.position_encoder(embedded)  
+            encoded_features = None         
+            
+            if self.pos_encoding_strategy == "concat":
+                batch_size = embedded.size(0)
+                encoded_features = torch.cat([embedded, pos_encoded.expand(batch_size, -1, -1)], dim=-1)
+            elif self.pos_encoding_strategy == "sum":
+                encoded_features = embedded + pos_encoded
+            embedded_features.append(encoded_features)
+            
         # num features
         if len(self.numerical_cols) > 0:
             projected_features = self.continuous_layer(num_x)

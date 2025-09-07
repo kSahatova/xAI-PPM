@@ -24,6 +24,8 @@ class NextEventPredictor(nn.Module):
         numerical_targets: list[str],
         padding_idx: int,
         strategy: str,
+        pos_encoding_form: str,
+        pos_encoding_strategy: str,
         backbone_name: str,
         backbone_pretrained: bool,
         backbone_finetuning: LoraConfig | FreezingConfig | None,
@@ -42,6 +44,8 @@ class NextEventPredictor(nn.Module):
 
         self.embedding_size = embedding_size
         self.strategy = strategy
+        self.pos_encoding_form = pos_encoding_form
+        self.pos_encoding_strategy = pos_encoding_strategy
 
         self.backbone_name = backbone_name
         self.backbone_pretrained = backbone_pretrained
@@ -64,6 +68,8 @@ class NextEventPredictor(nn.Module):
             # other params
             padding_idx=padding_idx,
             strategy=strategy,
+            pos_encoding_form=pos_encoding_form,
+            pos_encoding_strategy=pos_encoding_strategy
         )
 
         # define backbone

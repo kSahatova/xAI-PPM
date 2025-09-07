@@ -101,7 +101,7 @@ PRETRAINED_CONFIGS = {
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(fromfile_prefix_chars='@')
+    parser = argparse.ArgumentParser(fromfile_prefix_chars="@")
     parser.add_argument("--dataset", type=str, default="BPI17")
     parser.add_argument("--wandb", action="store_true", default=False)
     parser.add_argument("--persist_model", action="store_true", default=False)
@@ -127,14 +127,14 @@ def parse_args():
         "--strategy", type=str, default="sum", choices=["sum", "concat"]
     )
     parser.add_argument(
-        "--pos_encoding_form", type=str, default="dummy", 
-        choices=["sinusoidal", "learnable", "random", "dummy"]
+        "--pos_encoding_form",
+        type=str,
+        default="dummy",
+        choices=["sinusoidal", "learnable", "random", "dummy"],
     )
     parser.add_argument(
         "--pos_encoding_strategy", type=str, default="sum", choices=["sum", "concat"]
     )
-
-
 
     """ model config """
     parser.add_argument(
@@ -167,7 +167,7 @@ def parse_args():
         help="List of layer indices to freeze. If None, all layers are frozen.",
     )
 
-    return parser.parse_args(['@configs/train_lstm_args.txt'])
+    return parser.parse_args(["@configs/train_lstm_args.txt"])
 
 
 def prepare_data(
@@ -411,7 +411,6 @@ def main(training_config: dict):
 
 if __name__ == "__main__":
     args = parse_args()
-
 
     training_config = {
         # args to pop before logging
