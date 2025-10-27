@@ -5,7 +5,7 @@
 --rnn_type=lstm
 --embedding_size=16  
 --hidden_size=32  
---n_layers=1  
+--n_layers=2  
 --batch_size=1 
 --strategy=concat
 --checkpoint_path=D:/PycharmProjects/xAI-PPM/persisted_models/suffix/BPI17_lstm_25epochs_num_features_preserved.pth

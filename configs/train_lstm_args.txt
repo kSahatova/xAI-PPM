@@ -13,5 +13,3 @@
 --grad_clip=5.0
 --epochs=10
 --strategy=concat
---pos_encoding_form=sinusoidal
---pos_encoding_strategy=sum

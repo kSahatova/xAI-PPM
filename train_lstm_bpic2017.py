@@ -1,12 +1,7 @@
 import pprint
 import torch
-import argparse
-import pandas as pd
-from typing import Tuple
-
 from torch.utils.data import DataLoader
 
-from peft import LoraConfig, TaskType
 from ppm.datasets import ContinuousTraces
 from ppm.datasets.event_logs import EventFeatures, EventLog, EventTargets
 
@@ -18,16 +13,13 @@ from skpm.event_logs import (
     BPI20TravelPermitData,
     BPI20RequestForPayment,
 )
-from skpm.event_logs.split import unbiased
-from skpm.feature_extraction import TimestampExtractor
-
-from sklearn.preprocessing import StandardScaler
 
 from ppm.datasets.utils import continuous
 from ppm.engine.nep import train_engine
-from ppm.models.config import FreezingConfig
 from ppm.models import NextEventPredictor
 from ppm.wandb_utils import is_duplicate
+
+from ppm.utils import parse_args, prepare_data, get_model_config
 
 try:
     import wandb
@@ -100,189 +92,10 @@ PRETRAINED_CONFIGS = {
 }
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(fromfile_prefix_chars="@")
-    parser.add_argument("--dataset", type=str, default="BPI17")
-    parser.add_argument("--wandb", action="store_true", default=False)
-    parser.add_argument("--persist_model", action="store_true", default=False)
-    parser.add_argument("--project_name", type=str, default="multi-task-icpm")
-
-    """ training config """
-    parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epochs", type=int, default=25)
-    parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--weight_decay", type=float, default=0.1)
-    parser.add_argument("--grad_clip", type=float, default=5.0)
-
-    """ features and tasks """
-    # e.g.: python main --categorical_features a b
-    parser.add_argument("--categorical_features", nargs="+", default=["activity"])
-    parser.add_argument("--categorical_targets", nargs="+", default=["activity"])
-    parser.add_argument("--continuous_features", nargs="+", default="all")
-    parser.add_argument("--continuous_targets", nargs="+", default=None)
-
-    """ in layer config """
-    parser.add_argument(
-        "--strategy", type=str, default="sum", choices=["sum", "concat"]
-    )
-    parser.add_argument(
-        "--pos_encoding_form",
-        type=str,
-        default="dummy",
-        choices=["sinusoidal", "learnable", "random", "dummy"],
-    )
-    parser.add_argument(
-        "--pos_encoding_strategy", type=str, default="sum", choices=["sum", "concat"]
-    )
-
-    """ model config """
-    parser.add_argument(
-        "--backbone",
-        type=str,
-        default="rnn",
-        choices=["gpt2", "llama32-1b", "llama2-7b", "qwen25-05b", "rnn", "pm-gpt2"],
-    )
-    # if rnn
-    parser.add_argument("--embedding_size", type=int, default=16)
-    parser.add_argument("--hidden_size", type=int, default=32)
-    parser.add_argument("--n_layers", type=int, default=1)
-    parser.add_argument(
-        "--rnn_type", type=str, default="lstm", choices=["lstm", "gru", "rnn"]
-    )
-
-    """ if fine-tuning """
-    parser.add_argument(
-        "--fine_tuning", type=str, default=None, choices=["lora", "freeze"]
-    )
-    # if lora
-    parser.add_argument("--r", type=int, default=None)
-    parser.add_argument("--lora_alpha", type=int, default=None)
-    # if freeze
-    parser.add_argument(
-        "--freeze_layers",
-        nargs="+",
-        type=int,
-        default=None,
-        help="List of layer indices to freeze. If None, all layers are frozen.",
-    )
-
-    return parser.parse_args(["@configs/train_lstm_args.txt"])
-
-
-def prepare_data(
-    df: pd.DataFrame, unbiased_split_params: dict
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    df = df.loc[:, ["case:concept:name", "concept:name", "time:timestamp"]]
-    cases_to_drop = df.groupby("case:concept:name").size() > 2
-    cases_to_drop = cases_to_drop[cases_to_drop].index
-    df = df[df["case:concept:name"].isin(cases_to_drop)]
-
-    df = df.sort_values(by=["case:concept:name", "time:timestamp"])
-    train, test = unbiased(df, **unbiased_split_params)
-
-    time_unit = "d"
-    ts = TimestampExtractor(
-        case_features=["accumulated_time", "remaining_time"],
-        event_features="all",
-        time_unit=time_unit,
-    )
-    train[ts.get_feature_names_out()] = ts.fit_transform(train)
-    test[ts.get_feature_names_out()] = ts.transform(test)
-
-    train = train.drop(columns=["time:timestamp"])
-    test = test.drop(columns=["time:timestamp"])
-
-    train = train.rename(
-        columns={"case:concept:name": "case_id", "concept:name": "activity"}
-    )
-    test = test.rename(
-        columns={"case:concept:name": "case_id", "concept:name": "activity"}
-    )
-
-    sc = StandardScaler()
-    columns = NUMERICAL_FEATURES + ["remaining_time"]
-    # columns = ["accumulated_time", "remaining_time"]
-    train.loc[:, columns] = sc.fit_transform(train[columns])
-    test.loc[:, columns] = sc.transform(test[columns])
-
-    return train, test
-
-
-def get_fine_tuning(fine_tuning, **kwargs):
-    if fine_tuning == "lora":
-        target_modules = (
-            [
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "up_proj",
-                "down_proj",
-                "o_proj",
-                "gate_proj",
-            ]
-            if "gpt2" not in kwargs["model"]
-            else None
-        )
-        return LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            r=kwargs["r"],
-            lora_alpha=kwargs["lora_alpha"],
-            target_modules=target_modules,
-            use_rslora=True,
-        )
-    elif fine_tuning == "freeze":
-        return FreezingConfig(
-            ix_layers=kwargs["freeze_layers"],
-            module_path=kwargs["fine_tuning_module_path"],
-        )
-    elif fine_tuning is None:
-        return
-    else:
-        raise ValueError("Invalid fine-tuning strategy")
-
-
-def get_model_config(train_log: EventLog, training_config: dict):
-    pretrained_config = PRETRAINED_CONFIGS.get(training_config["backbone"], {})
-    if pretrained_config:
-        fine_tuning = get_fine_tuning(
-            fine_tuning=training_config["fine_tuning"],
-            r=training_config["r"],
-            lora_alpha=training_config["lora_alpha"],
-            freeze_layers=training_config["freeze_layers"],
-            fine_tuning_module_path=pretrained_config["fine_tuning_module_path"],
-            model=training_config["backbone"],
-        )
-        pretrained_config["fine_tuning"] = fine_tuning
-    if training_config["backbone"] != "rnn":
-        backbone_hf_name = pretrained_config["name"]
-    else:
-        backbone_hf_name = "rnn"
-    return {
-        "embedding_size": training_config["embedding_size"],
-        "categorical_cols": train_log.features.categorical,
-        "categorical_sizes": train_log.categorical_sizes,
-        "numerical_cols": train_log.features.numerical,
-        "categorical_targets": train_log.targets.categorical,
-        "numerical_targets": train_log.targets.numerical,
-        "padding_idx": train_log.special_tokens["<PAD>"],
-        "strategy": training_config["strategy"],
-        "pos_encoding_form": training_config["pos_encoding_form"],
-        "pos_encoding_strategy": training_config["pos_encoding_strategy"],
-        "backbone_name": backbone_hf_name,
-        "backbone_pretrained": True if pretrained_config else False,
-        "backbone_finetuning": pretrained_config.get("fine_tuning", None),
-        "backbone_type": training_config.get("rnn_type", None),
-        "backbone_hidden_size": training_config["hidden_size"],
-        "backbone_n_layers": training_config.get("n_layers", None),
-        "device": training_config["device"],
-    }
-
-
 def main(training_config: dict):
     log = EVENT_LOGS[training_config["log"]]()
     train, test = prepare_data(
-        log.dataframe, log.unbiased_split_params
+        log.dataframe, log.unbiased_split_params, NUMERICAL_FEATURES
     )  # this is my current code for the fine-tuning experiments
     event_features = EventFeatures(
         categorical=training_config["categorical_features"],
@@ -344,9 +157,11 @@ def main(training_config: dict):
         collate_fn=continuous,
     )
 
-    model_config = get_model_config(train_log, training_config)
+    model_config = get_model_config(train_log, training_config, PRETRAINED_CONFIGS)
 
     model = NextEventPredictor(**model_config).to(device=training_config["device"])
+    for l in model.named_parameters():
+        print(l[0])
 
     trainable_params = 0
     all_param = 0
@@ -452,8 +267,6 @@ if __name__ == "__main__":
         "strategy": args.strategy,
         "pos_encoding_form": args.pos_encoding_form,
         "pos_encoding_strategy": args.pos_encoding_strategy,
-        # "total_params": all_param,
-        # "trainable_params": trainable_params,
     }
     # if is_duplicate(training_config):
     #     print("Duplicate configuration. Skipping...")
