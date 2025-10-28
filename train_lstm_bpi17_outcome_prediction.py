@@ -1,44 +1,22 @@
 import pprint
+import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from ppm.datasets import ContinuousTraces
+from ppm.datasets.utils import continuous
+from ppm.datasets import ContinuousTraces, DatasetSchemas
 from ppm.datasets.event_logs import EventFeatures, EventLog, EventTargets
 
-from skpm.event_logs import (
-    BPI12,
-    BPI17,
-    BPI19,
-    BPI20PrepaidTravelCosts,
-    BPI20TravelPermitData,
-    BPI20RequestForPayment,
-)
+from skpm.event_logs import BPI17
 
-from ppm.datasets.utils import continuous
-from ppm.engine.nep import train_engine
-from ppm.models import NextEventPredictor
-from ppm.wandb_utils import is_duplicate
+from ppm.engine.op import train_engine
+from ppm.models import OutcomePredictor
 
-from ppm.utils import parse_args, prepare_data, get_model_config
+from ppm.utils import parse_args, add_outcome_labels, prepare_data, get_model_config
 
-try:
-    import wandb
-
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
 
 RANDOM_SEED = 42
 torch.manual_seed(RANDOM_SEED)
-
-EVENT_LOGS = {
-    "BPI12": BPI12,
-    "BPI17": BPI17,
-    "BPI19": BPI19,
-    "BPI20PrepaidTravelCosts": BPI20PrepaidTravelCosts,
-    "BPI20TravelPermitData": BPI20TravelPermitData,
-    "BPI20RequestForPayment": BPI20RequestForPayment,
-}
 
 NUMERICAL_FEATURES = [
     "accumulated_time",
@@ -91,16 +69,30 @@ PRETRAINED_CONFIGS = {
     },
 }
 
+EVENT_LOGS = {"BPI17": BPI17}
+
 
 def main(training_config: dict):
     log = EVENT_LOGS[training_config["log"]]()
-    train, test = prepare_data(
-        log.dataframe, log.unbiased_split_params, NUMERICAL_FEATURES
-    )  # this is my current code for the fine-tuning experiments
+    
+    labels_dict = {"O_Cancelled": 0, "O_Accepted": 1, "O_Refused": 2}
+    column_schema = getattr(DatasetSchemas, training_config["log"])()
+    labeled_df = add_outcome_labels(log.dataframe, column_schema, labels_dict)
+    result = prepare_data(labeled_df, log.unbiased_split_params, NUMERICAL_FEATURES, include_labels=True)
+    
+    # prepare_data may return either (train, test) or (train, test, train_timestamps, test_timestamps)
+    if isinstance(result, tuple) and len(result) == 4:
+        train, test, train_timestamps, test_timestamps = result
+    elif isinstance(result, tuple) and len(result) == 2:
+        train, test = result
+    else:
+        raise ValueError("Unexpected return value from prepare_data()")
+
     event_features = EventFeatures(
         categorical=training_config["categorical_features"],
         numerical=training_config["continuous_features"],
     )
+
     event_targets = EventTargets(
         categorical=training_config["categorical_targets"],
         numerical=training_config["continuous_targets"],
@@ -158,10 +150,9 @@ def main(training_config: dict):
     )
 
     model_config = get_model_config(train_log, training_config, PRETRAINED_CONFIGS)
-
-    model = NextEventPredictor(**model_config).to(device=training_config["device"])
-    for l in model.named_parameters():
-        print(l[0])
+    model_config.pop("categorical_targets", None)
+    model_config.pop("numerical_targets", None)
+    model = OutcomePredictor(**model_config).to(device=training_config["device"])
 
     trainable_params = 0
     all_param = 0
@@ -225,7 +216,8 @@ def main(training_config: dict):
 
 
 if __name__ == "__main__":
-    args = parse_args()
+    config_path = "configs/train_lstm_for_outcome_prediction.txt"
+    args = parse_args(config_path)
 
     training_config = {
         # args to pop before logging

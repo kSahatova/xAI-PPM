@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 
 from transformers import AutoModel
@@ -141,4 +142,128 @@ class NextEventPredictor(nn.Module):
         out = {}
         for target in self.out_layers:
             out[target] = self.out_layers[target](x)
+        return out, h
+
+
+
+class OutcomePredictor(nn.Module):
+    def __init__(
+        self,
+        embedding_size: int,
+        categorical_cols: list[str],
+        categorical_sizes: dict[str, int],
+        numerical_cols: list[str],
+        # categorical_targets: list[str],
+        # numerical_targets: list[str],
+        padding_idx: int,
+        strategy: str,
+        pos_encoding_form: str,
+        pos_encoding_strategy: str,
+        backbone_name: str,
+        backbone_pretrained: bool,
+        backbone_finetuning: LoraConfig | FreezingConfig | None,
+        backbone_type: str,
+        backbone_hidden_size: int,
+        backbone_n_layers: int,
+        device: str,
+    ):
+        super(OutcomePredictor, self).__init__()
+
+        self.categorical_cols = categorical_cols
+        self.categorical_sizes = categorical_sizes
+        self.numerical_cols = numerical_cols
+        # self.categorical_targets = categorical_targets
+        # self.numerical_targets = numerical_targets
+
+        self.embedding_size = embedding_size
+        self.strategy = strategy
+        self.pos_encoding_form = pos_encoding_form
+        self.pos_encoding_strategy = pos_encoding_strategy
+
+        self.backbone_name = backbone_name
+        self.backbone_pretrained = backbone_pretrained
+        self.backbone_finetuning = backbone_finetuning
+        self.backbone_type = backbone_type
+        self.backbone_hidden_size = backbone_hidden_size
+        self.backbone_n_layers = backbone_n_layers
+
+        self.padding_idx = padding_idx
+        self.device = device
+
+        # define input layer
+        self.in_layer = InLayer(
+            # output size
+            embedding_size=embedding_size,
+            # input sizes
+            categorical_cols=categorical_cols,
+            categorical_sizes=categorical_sizes,
+            numerical_cols=numerical_cols,
+            # other params
+            padding_idx=padding_idx,
+            strategy=strategy,
+            pos_encoding_form=pos_encoding_form,
+            pos_encoding_strategy=pos_encoding_strategy
+        )
+
+        # define backbone
+        if backbone_pretrained:
+            self.backbone = AutoModel.from_pretrained(backbone_name, token=HF_TOKEN)
+            if isinstance(backbone_finetuning, LoraConfig):
+                self.backbone = get_peft_model(self.backbone, backbone_finetuning)
+            elif isinstance(backbone_finetuning, FreezingConfig):
+                # self._freeze_params(backbone_finetuning)
+                backbone_finetuning.apply(self.backbone)
+            else:
+                raise NotImplementedError("Fine-tuning not implemented yet.")
+        else:
+            if backbone_name == "rnn":
+                if backbone_type == "lstm":
+                    self.backbone = nn.LSTM
+                elif backbone_type == "gru":
+                    self.backbone = nn.GRU
+                elif backbone_type == "rnn":
+                    self.backbone = nn.RNN
+                else:
+                    raise ValueError("Invalid RNN type.")
+                self.backbone = self.backbone(
+                    input_size=embedding_size,
+                    hidden_size=backbone_hidden_size,
+                    num_layers=backbone_n_layers,
+                    batch_first=True,
+                )
+            if backbone_name.endswith("gpt2"):
+                self.backbone = AutoModel.from_pretrained(
+                    "openai-community/gpt2",
+                )
+                self.backbone.apply(self.backbone._init_weights)
+
+        # define output layer(s)
+        self.classifier = OutLayer(
+                input_size=backbone_hidden_size,
+                output_size=2,
+            )
+
+    def forward(self, x_cat, x_num=None, attention_mask=None, h=None):
+        x = self.in_layer(x_cat, x_num)
+
+        if self.backbone_name == "rnn":
+            lengths = attention_mask.sum(dim=-1).long().tolist()
+            if not isinstance(lengths, list):
+                lengths = [lengths]
+            x = pack_padded_sequence(x, lengths, batch_first=True, enforce_sorted=False)
+            x = self.backbone(x, h)
+        else:
+            x = self.backbone(inputs_embeds=x, attention_mask=attention_mask)
+
+        if hasattr(x, "last_hidden_state"):
+            x = x.last_hidden_state
+        elif isinstance(x, tuple):
+            x, h = x
+            h = tuple([h_.detach() for h_ in h])
+            x = pad_packed_sequence(x, batch_first=True)[0]
+        else:
+            raise ValueError("Invalid output from backbone.")
+
+        out = self.classifier(x)
+        out = torch.sigmoid(out)
         return out, h

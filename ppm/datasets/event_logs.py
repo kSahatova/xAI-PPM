@@ -124,8 +124,8 @@ class EventLog:
             self.dataframe[f] = self.dataframe[f].astype("int32")
 
     def _encode_categorical_features(self):
-        for cat in set(self.features.categorical + self.targets.categorical):
-
+        # UPDATED: self.features.categorical + self.targets.categorical -> self.features.categorical 
+        for cat in set(self.features.categorical):
             self.dataframe.loc[:, cat] = self.dataframe.loc[:, cat].map(
                 self.stoi[cat.replace("next_", "")], na_action="ignore"
             )  # replace operation ensures that the next_activity is encoded using the same stoi as activity
@@ -191,16 +191,31 @@ class EventLog:
         """Target should be a column in the dataframe to be shifted (next event prediction)."""
         new_cat_target_names = []
         new_num_target_names = []
-        for target in self.targets.categorical + self.targets.numerical:
+        
+        # UPDATED: check for the type of categorical and numerical targets
+        if not isinstance(self.targets.categorical, list):
+            self.targets.categorical = [self.targets.categorical]
+        
+        if not isinstance(self.targets.numerical, list):
+            self.targets.numerical = [self.targets.numerical]
+
+        combined_targets = self.targets.categorical + self.targets.numerical
+        
+        for target in combined_targets:
             if target not in self.dataframe.columns:
                 raise ValueError(f"Target {target} not found in the log.")
             else:
                 if target in self.targets.categorical:
-                    new_cat_target_names.append(f"next_{target}")
-                    special_token = self.special_tokens["<EOS>"]
-                    self.dataframe[f"next_{target}"] = self.dataframe.groupby(
-                        "case_id", observed=True, as_index=False
-                    )[target].shift(-1, fill_value=special_token)
+                    # UPDATED: if the target is "activity", the corresponding target column is created;
+                    #          if the task is outcome prediction then the given column "outcome" is used
+                    if target == "activity": 
+                        new_cat_target_names.append(f"next_{target}")
+                        special_token = self.special_tokens["<EOS>"]
+                        self.dataframe[f"next_{target}"] = self.dataframe.groupby(
+                            "case_id", observed=True, as_index=False
+                        )[target].shift(-1, fill_value=special_token)
+                    else:
+                        new_cat_target_names.append(target)
                 else:
                     new_num_target_names.append(f"next_{target}")
                     special_token = 0.0

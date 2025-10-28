@@ -9,6 +9,8 @@ from torch.utils.data import DataLoader
 from peft import LoraConfig, TaskType
 from skpm.event_logs.split import unbiased
 from ppm.datasets.event_logs import EventLog
+from ppm.datasets import DatasetColumnSchema
+
 from ppm.models.config import FreezingConfig
 from sklearn.preprocessing import StandardScaler
 
@@ -86,7 +88,7 @@ def fetch_experiments(project="cosmo-v4"):
     return experiments
 
 
-def parse_args():
+def parse_args(config_path: str=""):
     parser = argparse.ArgumentParser(fromfile_prefix_chars="@")
     parser.add_argument("--dataset", type=str, default="BPI17")
     parser.add_argument("--wandb", action="store_true", default=False)
@@ -153,7 +155,71 @@ def parse_args():
         help="List of layer indices to freeze. If None, all layers are frozen.",
     )
 
-    return parser.parse_args(["@configs/train_lstm_args.txt"])
+    return parser.parse_args([f"@{config_path}"])
+
+
+def add_outcome_labels(
+    log_df: pd.DataFrame, col_schema: DatasetColumnSchema, 
+    labels_dict: dict, resource_freq_threshold: int=10, max_category_levels: int=10
+) -> pd.DataFrame:
+    """
+    Adds labels according to the provided dictionary. Labels are assigned to cases based on the last activity
+    """
+    # Create label mapping once
+    dt_labeled = log_df.copy()
+    relevant_offer_events = list(labels_dict.keys())
+
+    timestamp = col_schema.timestamp_col
+    activity = col_schema.activity_col
+    case_id = col_schema.case_id_col
+    resource = col_schema.resource_col
+    label_col = col_schema.label_col
+    cat_cols = col_schema.cat_cols
+
+
+    # Optimize: Filter once, use stable sort if needed, chain operations
+    last_o_events = (dt_labeled[dt_labeled.loc[:, "EventOrigin"] == "Offer"]
+                    .sort_values(timestamp, ascending=True, kind='mergesort')
+                    .groupby(case_id)[activity]
+                    .last()
+                    .rename("last_o_activity"))
+    
+    dt_labeled = dt_labeled.merge(last_o_events, left_on=case_id, right_index=True, how='inner')
+    dt_labeled = dt_labeled[dt_labeled.last_o_activity.isin(relevant_offer_events)]
+
+    dt_labeled[label_col] = dt_labeled["last_o_activity"].map(labels_dict)
+    core_cols = col_schema.static_cols + col_schema.dynamic_cols
+    dt_labeled = dt_labeled.loc[:, core_cols + ["last_o_activity"]]
+
+    # Sort once and reuse grouped object
+    dt_labeled = dt_labeled.sort_values(timestamp, ascending=True, kind="mergesort")
+    grouped = dt_labeled.groupby(case_id)
+
+    # Fill missing values
+    cols_to_fill = [
+        col for col in core_cols if col in dt_labeled.columns
+    ]
+    dt_labeled[cols_to_fill] = grouped[cols_to_fill].ffill()
+    dt_labeled[cat_cols] = dt_labeled[cat_cols].fillna("missing")
+    dt_labeled = dt_labeled.fillna(0)
+
+    # Precompute value counts for all categorical columns
+    value_counts_cache = {col: dt_labeled[col].value_counts() for col in cat_cols}
+
+    # Set infrequent factor levels using vectorized operations
+    for col in cat_cols:
+        counts = value_counts_cache[col]
+        if col == resource:
+            # Keep only frequent resources
+            frequent_values = counts[counts >= resource_freq_threshold].index
+            dt_labeled.loc[~dt_labeled[col].isin(frequent_values), col] = "other"
+        elif col != activity:
+            # Keep only top N categories
+            if len(counts) > max_category_levels:
+                top_categories = counts.index[:max_category_levels]
+                dt_labeled.loc[~dt_labeled[col].isin(top_categories), col] = "other"
+    
+    return dt_labeled
 
 
 def prepare_data(
@@ -161,8 +227,12 @@ def prepare_data(
     unbiased_split_params: dict,
     numerical_features: List[str],
     return_timestamps: bool = False,
+    include_labels: bool = False
 ):
-    df = df.loc[:, ["case:concept:name", "concept:name", "time:timestamp"]]
+    if include_labels: 
+        df = df.loc[:, ["case:concept:name", "concept:name", "time:timestamp", "outcome"]]
+    else:
+        df = df.loc[:, ["case:concept:name", "concept:name", "time:timestamp"]]
     cases_to_drop = df.groupby("case:concept:name").size() > 2
     cases_to_drop = cases_to_drop[cases_to_drop].index
     df = df[df["case:concept:name"].isin(cases_to_drop)]

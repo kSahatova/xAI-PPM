@@ -87,7 +87,6 @@ class InLayer(nn.Module):
         for ix, name in enumerate(self.categorical_cols):
             # since we use OrderedDict, we can access the embedding layer by index
             embedded = self.embedding_layers[name](cat_x[..., ix])
-            # embedded_features.append(embed)
 
             # add positional encoding
             if self.pos_encoding_form is not None:
@@ -147,6 +146,7 @@ class OutLayer(nn.Module):
     def forward(self, x):
         x = self.layer_norm(x)
         return self.linear(x)
+
 
 class CRTPDecoder(nn.Module):
     def __init__(self, input_size, output_size):
