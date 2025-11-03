@@ -33,7 +33,7 @@ def train_step(
         for target in tracker.metrics
         if target.startswith("train")
     }
-    total_targets = 0
+    total_targets = len(data_loader.dataset.traces)
     for batch, items in enumerate(data_loader):
         x_cat, x_num, y_cat, y_num = items
         x_cat, x_num, y_cat, y_num = (
@@ -44,9 +44,9 @@ def train_step(
         )
 
         # Taking one outcome per case since it is propagated for the whole case before which contradicts with the loss function input
-        y_cat = y_cat[:, -1, :].squeeze(1)
+        y_cat = y_cat[:, -1, :]
         attention_mask = (x_cat[..., 0] != 0).long()
-        total_targets += y_cat.shape[0]  # attention_mask.sum().item()
+        # total_targets += y_cat.shape[0]  # attention_mask.sum().item()
 
         optimizer.zero_grad()
         # with torch.autocast(device_type=device, dtype=torch.float16):
@@ -54,10 +54,10 @@ def train_step(
 
         batch_loss = 0.0
         # mask = attention_mask.bool().view(-1)
-        loss = F.cross_entropy(
+        loss = F.binary_cross_entropy(
             out,
-            y_cat,
-            ignore_index=model.padding_idx,
+            y_cat.to(torch.float),
+            # ignore_index=model.padding_idx,
             reduction="sum",
         )
         predictions = torch.argmax(out, dim=-1)
@@ -88,7 +88,8 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
         for target in tracker.metrics
         if target.startswith("test")
     }
-    total_targets = 0
+    # total_targets = len(data_loader)
+    total_targets = len(data_loader.dataset.traces)
 
     with torch.inference_mode():
         for batch, items in enumerate(data_loader):
@@ -100,9 +101,9 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
                 y_num.to(device),
             )
 
-            y_cat = y_cat[:, -1, :].squeeze(1)
+            y_cat = y_cat[:, -1, :]
             attention_mask = (x_cat[..., 0] != 0).long()
-            total_targets += y_cat.shape[0]  # attention_mask.sum().item()
+            # total_targets += y_cat.shape[0]  # attention_mask.sum().item()
 
             # with torch.autocast(device_type=device, dtype=torch.float16):
             out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
@@ -110,14 +111,14 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
             batch_loss = 0.0
             # mask = attention_mask.bool().view(-1)
 
-            loss = F.cross_entropy(
+            loss = F.binary_cross_entropy(
                 out,
-                y_cat.view(-1),
-                ignore_index=model.padding_idx,
+                y_cat.to(torch.float),
+                # ignore_index=model.padding_idx,
                 reduction="sum",
             )
             predictions = torch.argmax(out, dim=-1)
-            acc = (predictions == y_cat).sum().item()
+            acc = (predictions == y_cat.squeeze(1)).sum().item()
 
             batch_loss += loss
             metrics["test_outcome"]["loss"] += loss.item()

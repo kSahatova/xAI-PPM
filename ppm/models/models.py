@@ -237,7 +237,7 @@ class OutcomePredictor(nn.Module):
         # define output layer(s)
         self.classifier = OutLayer(
                 input_size=backbone_hidden_size,
-                output_size=2,
+                output_size=1,
             )
 
     def forward(self, x_cat, x_num=None, attention_mask=None, h=None):
