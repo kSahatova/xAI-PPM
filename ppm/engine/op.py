@@ -5,6 +5,8 @@ from torch.optim import Optimizer
 from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
 
+from tqdm import tqdm
+
 from ppm.engine.utils import save_checkpoint
 from ppm.metrics import MetricsTracker
 
@@ -41,27 +43,25 @@ def train_step(
             y_num.to(device),
         )
 
+        # Taking one outcome per case since it is propagated for the whole case before which contradicts with the loss function input
+        y_cat = y_cat[:, -1, :].squeeze(1)
         attention_mask = (x_cat[..., 0] != 0).long()
-        total_targets += attention_mask.sum().item()
+        total_targets += y_cat.shape[0]  # attention_mask.sum().item()
 
         optimizer.zero_grad()
         # with torch.autocast(device_type=device, dtype=torch.float16):
         out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
 
         batch_loss = 0.0
-        mask = attention_mask.bool().view(-1)
+        # mask = attention_mask.bool().view(-1)
         loss = F.cross_entropy(
-            out.view(-1, out.size(-1)),
-            y_cat,  
+            out,
+            y_cat,
             ignore_index=model.padding_idx,
             reduction="sum",
         )
         predictions = torch.argmax(out, dim=-1)
-        acc = (
-            (predictions.view(-1)[mask] == y_cat.view(-1)[mask])
-            .sum()
-            .item()
-        )
+        acc = (predictions.view(-1) == y_cat.view(-1)).sum().item()
 
         batch_loss += loss
         metrics["train_outcome"]["loss"] += loss.item()
@@ -100,40 +100,28 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
                 y_num.to(device),
             )
 
+            y_cat = y_cat[:, -1, :].squeeze(1)
             attention_mask = (x_cat[..., 0] != 0).long()
-            total_targets += attention_mask.sum().item()
+            total_targets += y_cat.shape[0]  # attention_mask.sum().item()
 
             # with torch.autocast(device_type=device, dtype=torch.float16):
             out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
 
             batch_loss = 0.0
-            mask = attention_mask.bool().view(-1)
-            for ix, target in enumerate(data_loader.dataset.log.targets.categorical):
-                loss = F.cross_entropy(
-                    out[target].view(-1, out[target].size(-1)),
-                    y_cat[..., ix].view(-1),
-                    ignore_index=model.padding_idx,
-                    reduction="sum",
-                )
-                predictions = torch.argmax(out[target], dim=-1)
-                acc = (
-                    (predictions.view(-1)[mask] == y_cat[..., ix].view(-1)[mask])
-                    .sum()
-                    .item()
-                )
+            # mask = attention_mask.bool().view(-1)
 
-                batch_loss += loss
-                metrics["test_outcome"]["loss"] += loss.item()
-                metrics["test_outcome"]["acc"] += acc
+            loss = F.cross_entropy(
+                out,
+                y_cat.view(-1),
+                ignore_index=model.padding_idx,
+                reduction="sum",
+            )
+            predictions = torch.argmax(out, dim=-1)
+            acc = (predictions == y_cat).sum().item()
 
-            for ix, target in enumerate(data_loader.dataset.log.targets.numerical):
-                loss = F.mse_loss(
-                    out[target].view(-1)[mask],
-                    y_num[..., ix].view(-1)[mask],
-                    reduction="sum",
-                )
-                batch_loss += loss
-                metrics[f"test_{target}"]["loss"] += loss.item()
+            batch_loss += loss
+            metrics["test_outcome"]["loss"] += loss.item()
+            metrics["test_outcome"]["acc"] += acc
 
     for target in metrics:
         for k in metrics[target].keys():
@@ -160,13 +148,8 @@ def train_engine(
         for split in ["train", "test"]
         for target in train_loader.dataset.log.targets.categorical
     }
-    # numerical_target_metrics = {
-    #     f"{split}_{target}": ["loss"]
-    #     for split in ["train", "test"]
-    #     for target in train_loader.dataset.log.targets.numerical
-    # }
+
     tracker = MetricsTracker({**categorical_target_metrics})
-    # tracker = MetricsTracker({**categorical_target_metrics, **numerical_target_metrics})
 
     best_loss = torch.inf
     no_improvement = 0
@@ -196,7 +179,7 @@ def train_engine(
         if WANDB_AVAILABLE and use_wandb:
             wandb.log(tracker.latest())
 
-        loss_key = "test_next_activity_loss" if "test_next_activity" in tracker.metrics else "test_next_remaining_time_loss"
+        loss_key = "test_outcome_loss"
         activity_loss = tracker.latest()[loss_key]
         if persist_model:
             if activity_loss < best_loss:

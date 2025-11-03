@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -153,8 +154,6 @@ class OutcomePredictor(nn.Module):
         categorical_cols: list[str],
         categorical_sizes: dict[str, int],
         numerical_cols: list[str],
-        # categorical_targets: list[str],
-        # numerical_targets: list[str],
         padding_idx: int,
         strategy: str,
         pos_encoding_form: str,
@@ -172,9 +171,7 @@ class OutcomePredictor(nn.Module):
         self.categorical_cols = categorical_cols
         self.categorical_sizes = categorical_sizes
         self.numerical_cols = numerical_cols
-        # self.categorical_targets = categorical_targets
-        # self.numerical_targets = numerical_targets
-
+        
         self.embedding_size = embedding_size
         self.strategy = strategy
         self.pos_encoding_form = pos_encoding_form
@@ -247,9 +244,11 @@ class OutcomePredictor(nn.Module):
         x = self.in_layer(x_cat, x_num)
 
         if self.backbone_name == "rnn":
-            lengths = attention_mask.sum(dim=-1).long().tolist()
-            if not isinstance(lengths, list):
-                lengths = [lengths]
+            try: 
+                lengths = attention_mask.sum(dim=-1).long().tolist()
+            except Exception as e:
+                print("Attention mask has not been provided")
+
             x = pack_padded_sequence(x, lengths, batch_first=True, enforce_sorted=False)
             x = self.backbone(x, h)
         else:
@@ -263,7 +262,8 @@ class OutcomePredictor(nn.Module):
             x = pad_packed_sequence(x, batch_first=True)[0]
         else:
             raise ValueError("Invalid output from backbone.")
-
-        out = self.classifier(x)
+        
+        last_outputs = x[torch.arange(x.shape[0]), np.asarray(lengths) - 1, :]
+        out = self.classifier(last_outputs)
         out = torch.sigmoid(out)
         return out, h

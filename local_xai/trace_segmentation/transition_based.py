@@ -14,7 +14,9 @@ def segment_by_threshold(
     """
 
     segments = []
+    segments_ids = []
     current_segment = [trace[0]]
+    current_segment_ids = {0}
 
     for i in range(len(trace) - 1):
         activity1 = trace[i]
@@ -31,14 +33,19 @@ def segment_by_threshold(
         if prob >= threshold:
             # High probability transition - continue segment
             current_segment.append(trace[i + 1])
+            current_segment_ids.union({i + 1})
         else:
             # Low probability transition - start new segment
             segments.append(current_segment)
+            segments_ids.append(current_segment_ids)
+
             current_segment = [trace[i + 1]]
+            current_segment_ids = {i + 1}
 
     # Add final segment
     segments.append(current_segment)
-    return segments
+    segments_ids.append(current_segment_ids)
+    return segments, segments_ids
 
 
 def segment_by_adaptive_threshold(

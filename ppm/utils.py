@@ -154,7 +154,7 @@ def parse_args(config_path: str=""):
         default=None,
         help="List of layer indices to freeze. If None, all layers are frozen.",
     )
-
+    
     return parser.parse_args([f"@{config_path}"])
 
 

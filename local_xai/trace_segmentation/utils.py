@@ -1,8 +1,8 @@
 import numpy as np
+import pandas as pd
+from typing import Dict, Tuple
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from typing import Dict, Tuple
-
 
 def visualize_trace_vertical(
     trace: np.ndarray,
@@ -120,4 +120,28 @@ def visualize_trace_vertical(
     ax.spines["left"].set_visible(False)
 
     plt.tight_layout()
+    plt.show()
+
+
+
+def plot_segmented_deltas(timestamp_deltas: pd.Series, segments_dict: Dict[Tuple[int, int], Tuple]):
+    fig, ax = plt.subplots(figsize=(8, 4))
+    
+    for i, (k, v) in enumerate(segments_dict.items()):
+        start, end = k
+        color = v    
+        segment_deltas = timestamp_deltas.iloc[start:end+1]
+        ax.plot(
+            segment_deltas.index,
+            segment_deltas.values,
+            marker='o', color=color, alpha=0.6,
+            label=f"Segment {i+1}"
+        )
+
+    ax.set_xlabel("Index")
+    ax.set_ylabel("Δt (seconds)")
+    ax.set_title("Time Differences per Segment")
+    ax.legend(labelcolor='black', loc='center left', bbox_to_anchor=(1, 0.5))
+    ax.grid(True, alpha=0.3)
+
     plt.show()

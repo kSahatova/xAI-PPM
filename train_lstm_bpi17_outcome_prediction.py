@@ -74,12 +74,24 @@ EVENT_LOGS = {"BPI17": BPI17}
 
 def main(training_config: dict):
     log = EVENT_LOGS[training_config["log"]]()
-    
+
     labels_dict = {"O_Cancelled": 0, "O_Accepted": 1, "O_Refused": 2}
     column_schema = getattr(DatasetSchemas, training_config["log"])()
     labeled_df = add_outcome_labels(log.dataframe, column_schema, labels_dict)
-    result = prepare_data(labeled_df, log.unbiased_split_params, NUMERICAL_FEATURES, include_labels=True)
-    
+
+    # Remove O_Refused to convert the task to a binary classification
+    binary_labeled_df = labeled_df[labeled_df["outcome"] != 2]
+    print(
+        "Outcomes of the cases are ",
+        binary_labeled_df["last_o_activity"].unique().tolist(),
+    )
+    result = prepare_data(
+        binary_labeled_df,
+        log.unbiased_split_params,
+        NUMERICAL_FEATURES,
+        include_labels=True,
+    )
+
     # prepare_data may return either (train, test) or (train, test, train_timestamps, test_timestamps)
     if isinstance(result, tuple) and len(result) == 4:
         train, test, train_timestamps, test_timestamps = result
