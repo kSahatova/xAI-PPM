@@ -13,11 +13,14 @@ class MetricsTracker:
 
     def update(self, target, **kwargs):
         for metric, value in kwargs.items():
+            self.metrics[target].setdefault(metric, [])
             self.metrics[target][metric].append(value)
             if metric == "loss" and value < self.best_metrics[target][metric]:
                 self.best_metrics[target][metric] = value
-            if metric == "acc" and value > self.best_metrics[target][metric]:
-                self.best_metrics[target][metric] = value
+            if metric.startswith("acc"):
+                self.best_metrics[target].setdefault(metric, 0.0)
+                if value > self.best_metrics[target][metric]:
+                    self.best_metrics[target][metric] = value
 
     def latest(self):
         current = {

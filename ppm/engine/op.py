@@ -33,9 +33,11 @@ def train_step(
         for target in tracker.metrics
         if target.startswith("train")
     }
-    total_targets = len(data_loader.dataset.traces)
+    # total_targets = len(data_loader.dataset.traces)
+    total_targets=0
+    valid_positions = {}
     for batch, items in enumerate(data_loader):
-        x_cat, x_num, y_cat, y_num = items
+        x_cat, x_num, y_cat, y_num, ids = items
         x_cat, x_num, y_cat, y_num = (
             x_cat.to(device),
             x_num.to(device),
@@ -44,9 +46,9 @@ def train_step(
         )
 
         # Taking one outcome per case since it is propagated for the whole case before which contradicts with the loss function input
-        y_cat = y_cat[:, -1, :]
+        # y_cat = y_cat[:, -1, :]
         attention_mask = (x_cat[..., 0] != 0).long()
-        # total_targets += y_cat.shape[0]  # attention_mask.sum().item()
+        total_targets += y_cat.shape[0]  # attention_mask.sum().item()
 
         optimizer.zero_grad()
         # with torch.autocast(device_type=device, dtype=torch.float16):
@@ -65,7 +67,26 @@ def train_step(
 
         batch_loss += loss
         metrics["train_outcome"]["loss"] += loss.item()
-        metrics["train_outcome"]["acc"] += acc
+        
+        
+        max_len = attention_mask.size(1)
+        idxs = torch.arange(max_len).unsqueeze(0).to(device)  # [1, S]
+        lengths = attention_mask.sum(dim=-1)  # [B]
+        mask = idxs < lengths.unsqueeze(1)  # [B, S]
+        
+        correct = (predictions == y_cat.squeeze()) & mask
+        for t in range(max_len):
+            valid = mask[:, t]
+            if valid.any():
+                acc_t = correct[:, t][valid].float().sum()
+            else:
+                acc_t = torch.tensor(float("nan"))
+            metrics["train_outcome"].setdefault(f"acc_pos_{t}", 0.0)
+            metrics["train_outcome"][f"acc_pos_{t}"] += acc_t.item()
+            valid_positions.setdefault(f"acc_pos_{t}", 0)
+            valid_positions[f"acc_pos_{t}"] += valid.sum().item()
+
+        # metrics["train_outcome"]["acc"] += acc
 
         batch_loss.backward()
         if grad_clip:
@@ -74,7 +95,10 @@ def train_step(
 
     for target in metrics:
         for k in metrics[target].keys():
-            metrics[target][k] /= total_targets
+            if k.startswith("acc_pos_"):
+                metrics[target][k] /= valid_positions[k]
+            else:
+                metrics[target][k] /= total_targets
 
         tracker.update(target, **metrics[target])
 
@@ -89,11 +113,12 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
         if target.startswith("test")
     }
     # total_targets = len(data_loader)
-    total_targets = len(data_loader.dataset.traces)
-
+    # total_targets = len(data_loader.dataset.traces)
+    total_targets=0
+    valid_positions = {}
     with torch.inference_mode():
         for batch, items in enumerate(data_loader):
-            x_cat, x_num, y_cat, y_num = items
+            x_cat, x_num, y_cat, y_num, ids = items
             x_cat, x_num, y_cat, y_num = (
                 x_cat.to(device),
                 x_num.to(device),
@@ -101,9 +126,9 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
                 y_num.to(device),
             )
 
-            y_cat = y_cat[:, -1, :]
+            # y_cat = y_cat[:, -1, :]
             attention_mask = (x_cat[..., 0] != 0).long()
-            # total_targets += y_cat.shape[0]  # attention_mask.sum().item()
+            total_targets += y_cat.shape[0]  # attention_mask.sum().item()
 
             # with torch.autocast(device_type=device, dtype=torch.float16):
             out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
@@ -118,15 +143,35 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
                 reduction="sum",
             )
             predictions = torch.argmax(out, dim=-1)
-            acc = (predictions == y_cat.squeeze(1)).sum().item()
+            acc = (predictions == y_cat.squeeze()).sum().item()
 
             batch_loss += loss
             metrics["test_outcome"]["loss"] += loss.item()
-            metrics["test_outcome"]["acc"] += acc
+            
+            max_len = attention_mask.size(1)
+            idxs = torch.arange(max_len).unsqueeze(0).to(device)  # [1, S]
+            lengths = attention_mask.sum(dim=-1)  # [B]
+            mask = idxs < lengths.unsqueeze(1)  # [B, S]
+            
+            correct = (predictions == y_cat.squeeze()) & mask
+            for t in range(max_len):
+                valid = mask[:, t]
+                if valid.any():
+                    acc_t = correct[:, t][valid].float().sum()
+                else:
+                    acc_t = torch.tensor(float("nan"))
+                metrics["test_outcome"].setdefault(f"acc_pos_{t}", 0.0)
+                metrics["test_outcome"][f"acc_pos_{t}"] += acc_t.item()
+                valid_positions.setdefault(f"acc_pos_{t}", 0)
+                valid_positions[f"acc_pos_{t}"] += valid.sum().item()
+            # metrics["test_outcome"]["acc"] += acc
 
     for target in metrics:
         for k in metrics[target].keys():
-            metrics[target][k] /= total_targets
+            if k.startswith("acc_pos_"):
+                metrics[target][k] /= valid_positions[k]
+            else:
+                metrics[target][k] /= total_targets
 
         tracker.update(target, **metrics[target])
 
@@ -204,5 +249,21 @@ def train_engine(
                 break
 
         best_loss = min(best_loss, tracker.latest()[loss_key])
+
+
+    # if you dont' want to use wandb:
+    import pandas as pd
+    def quick_convert_to_df(data):
+        df = pd.DataFrame(data)
+        df = df.T.reset_index().rename(columns={'index': 'acc position', 0: 'acc'})
+        df = df[df['acc position'].str.startswith('acc_pos_')]
+        return df
+    
+    train_df = quick_convert_to_df(tracker.history()['train_outcome'])
+    test_df = quick_convert_to_df(tracker.history()['test_outcome'])
+    df = pd.merge(train_df, test_df, on='acc position', suffixes=('_train', '_test'))
+    df.to_csv("a.csv", index=False)
+    # print(df)
+    
 
     optimizer.zero_grad()

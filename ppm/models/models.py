@@ -263,7 +263,7 @@ class OutcomePredictor(nn.Module):
         else:
             raise ValueError("Invalid output from backbone.")
         
-        last_outputs = x[torch.arange(x.shape[0]), np.asarray(lengths) - 1, :]
-        out = self.classifier(last_outputs)
+        # last_outputs = x[torch.arange(x.shape[0]), np.asarray(lengths) - 1, :]
+        out = self.classifier(x)
         out = torch.sigmoid(out)
         return out, h

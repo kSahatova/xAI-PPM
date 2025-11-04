@@ -86,6 +86,7 @@ class ContinuousTraces(Dataset):
             self.num_features[trace],
             self.cat_targets[trace],
             self.num_targets[trace],
+            self.prefix_lengths[trace],
         )
 
     def to(self, device: str):
