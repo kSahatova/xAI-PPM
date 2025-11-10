@@ -62,7 +62,7 @@ def train_step(
             # ignore_index=model.padding_idx,
             reduction="sum",
         )
-        predictions = torch.argmax(out, dim=-1)
+        predictions = ((out.squeeze(1)) > 0.5).float()
         acc = (predictions.view(-1) == y_cat.view(-1)).sum().item()
 
         batch_loss += loss
@@ -75,7 +75,7 @@ def train_step(
         lengths = attention_mask.sum(dim=-1)  # [B]
         mask = idxs < lengths.unsqueeze(1)  # [B, S]
         
-        correct = (predictions == y_cat.squeeze()) & mask
+        correct = (predictions.squeeze() == y_cat.squeeze()) & mask
         for t in range(max_len):
             valid = mask[:, t]
             if valid.any():
@@ -143,8 +143,8 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
                 # ignore_index=model.padding_idx,
                 reduction="sum",
             )
-            predictions = torch.argmax(out, dim=-1)
-            acc = (predictions == y_cat.squeeze()).sum().item()
+            predictions = ((out.squeeze(1)) > 0.5).float()
+            acc = (predictions.squeeze() == y_cat.squeeze()).sum().item()
 
             batch_loss += loss
             metrics["test_outcome"]["loss"] += loss.item()
@@ -155,7 +155,7 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
             lengths = attention_mask.sum(dim=-1)  # [B]
             mask = idxs < lengths.unsqueeze(1)  # [B, S]
             
-            correct = (predictions == y_cat.squeeze()) & mask
+            correct = (predictions.squeeze() == y_cat.squeeze()) & mask
             for t in range(max_len):
                 valid = mask[:, t]
                 if valid.any():
