@@ -27,11 +27,13 @@ class MetricsTracker:
             f"{target}_{metric}": values[-1]
             for target, metrics in self.metrics.items()
             for metric, values in metrics.items()
+            if not metric.startswith("acc_pos")
         }
         best = {
             f"best_{target}_{metric}": self.best_metrics[target][metric]
             for target, metrics in self.metrics.items()
             for metric in metrics
+            if not metric.startswith("acc_pos")
         }
         return {**current, **best}
 

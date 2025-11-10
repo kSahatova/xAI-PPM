@@ -37,7 +37,7 @@ def train_step(
     total_targets=0
     valid_positions = {}
     for batch, items in enumerate(data_loader):
-        x_cat, x_num, y_cat, y_num, ids = items
+        x_cat, x_num, y_cat, y_num = items
         x_cat, x_num, y_cat, y_num = (
             x_cat.to(device),
             x_num.to(device),
@@ -67,6 +67,7 @@ def train_step(
 
         batch_loss += loss
         metrics["train_outcome"]["loss"] += loss.item()
+        metrics["train_outcome"]["acc"] += acc
         
         
         max_len = attention_mask.size(1)
@@ -118,7 +119,7 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
     valid_positions = {}
     with torch.inference_mode():
         for batch, items in enumerate(data_loader):
-            x_cat, x_num, y_cat, y_num, ids = items
+            x_cat, x_num, y_cat, y_num = items
             x_cat, x_num, y_cat, y_num = (
                 x_cat.to(device),
                 x_num.to(device),
@@ -147,6 +148,7 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
 
             batch_loss += loss
             metrics["test_outcome"]["loss"] += loss.item()
+            metrics["test_outcome"]["acc"] += acc
             
             max_len = attention_mask.size(1)
             idxs = torch.arange(max_len).unsqueeze(0).to(device)  # [1, S]
