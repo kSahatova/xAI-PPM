@@ -11,8 +11,24 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-"""The TimeSHAP package"""
-import altair as alt
-from .version import __version__
 
-alt.themes.enable("feedzai")
+
+from . import utils
+from . import pruning
+from . import event_level
+from . import feature_level
+from . import cell_level
+from . import local_report
+from . import global_report
+from . import plots_for_el
+
+__all__ = [
+    "utils",
+    "pruning",
+    "event_level",
+    "feature_level",
+    "cell_level",
+    "local_report",
+    "global_report",
+    "plots_for_el",
+]

@@ -106,7 +106,7 @@ def parse_args(config_path: str=""):
     """ features and tasks """
     # e.g.: python main --categorical_features a b
     parser.add_argument("--categorical_features", nargs="+", default=["activity"])
-    parser.add_argument("--categorical_targets", nargs="+", default=["activity"])
+    parser.add_argument("--categorical_targets", nargs="+", default=None)
     parser.add_argument("--continuous_features", nargs="+", default="all")
     parser.add_argument("--continuous_targets", nargs="+", default=None)
 

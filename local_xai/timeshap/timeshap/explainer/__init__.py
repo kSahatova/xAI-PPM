@@ -12,10 +12,10 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from .utils import *
+from .kernel import *
 from .pruning import *
 from .event_level import *
 from .feature_level import *
 from .cell_level import *
-from .local_report import *
-from .global_report import *
+# from .local_methods import *
+# from .global_methods import *

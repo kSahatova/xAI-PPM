@@ -31,7 +31,7 @@ def feature_level(f: Callable,
                   pruned_idx: int,
                   random_seed: int,
                   nsamples: int,
-                  model_feats: List[Union[int, str]] = None,
+                  model_feats: List[Union[int, str]],
                   ) -> pd.DataFrame:
     """Method to calculate event level explanations
 
@@ -213,7 +213,7 @@ def feat_explain_all(f: Callable,
                      append_to_files: bool = False,
                      verbose: bool = False,
                      ) -> pd.DataFrame:
-    """Calculates event level explanations for all entities on the provided
+    """Calculates feature level explanations for all entities on the provided
     DataFrame applying pruning if explicit
 
     Parameters

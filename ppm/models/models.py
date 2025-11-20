@@ -154,6 +154,8 @@ class OutcomePredictor(nn.Module):
         categorical_cols: list[str],
         categorical_sizes: dict[str, int],
         numerical_cols: list[str],
+        # categorical_targets: list[str],
+        # numerical_targets: list[str],
         padding_idx: int,
         strategy: str,
         pos_encoding_form: str,
@@ -235,6 +237,18 @@ class OutcomePredictor(nn.Module):
                 self.backbone.apply(self.backbone._init_weights)
 
         # define output layer(s)
+        # self.out_layers = nn.ModuleDict()
+        # for target in categorical_targets:
+        #     self.out_layers[target] = OutLayer(
+        #         input_size=backbone_hidden_size,
+        #         output_size=1,
+        #     )
+        # for target in numerical_targets:
+        #     self.out_layers[target] = OutLayer(
+        #         input_size=backbone_hidden_size,
+        #         output_size=1,
+        #     )
+
         self.classifier = OutLayer(
                 input_size=backbone_hidden_size,
                 output_size=1,
@@ -266,4 +280,9 @@ class OutcomePredictor(nn.Module):
         # last_outputs = x[torch.arange(x.shape[0]), np.asarray(lengths) - 1, :]
         out = self.classifier(x)
         out = torch.sigmoid(out)
+
+        # out = {}
+        # for target in self.out_layers:
+        #     out[target] = torch.sigmoid(self.out_layers[target](x))
+
         return out, h

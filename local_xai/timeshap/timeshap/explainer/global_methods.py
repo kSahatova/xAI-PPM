@@ -20,7 +20,7 @@ from timeshap.explainer.pruning import verify_pruning_dict
 from timeshap.explainer.event_level import verify_event_dict
 from timeshap.explainer.feature_level import verify_feature_dict
 
-from timeshap.plot import plot_global_report
+# from timeshap.plot import plot_global_report
 import os
 from timeshap.utils import convert_to_indexes, convert_data_to_3d, validate_input
 
@@ -299,9 +299,9 @@ def global_report(f: Callable[[np.ndarray], np.ndarray],
                                  max_instances, verbose
                                  )
 
-    prun_stats, global_plot = \
-        plot_global_report(pruning_dict, event_dict, feature_dict, prun_indexes,
-                           event_data, feat_data
-                           )
+    # prun_stats, global_plot = \
+    #     plot_global_report(pruning_dict, event_dict, feature_dict, prun_indexes,
+    #                        event_data, feat_data
+    #                        )
 
-    return prun_stats, global_plot
+    return prun_indexes, event_data, feat_data

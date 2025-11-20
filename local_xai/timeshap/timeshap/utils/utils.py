@@ -12,11 +12,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from typing import List, Union, Callable, Dict, Tuple
-import pandas as pd
-import numpy as np
 import copy
+import numpy as np
+import pandas as pd
 from scipy import stats
+from typing import List, Union, Callable, Dict, Tuple, Optional
 
 
 def validate_input(f, data, baseline, model_features, schema, entity_col, time_col):
@@ -89,48 +89,6 @@ def validate_input(f, data, baseline, model_features, schema, entity_col, time_c
         assert entity_col is not None, (
             "Entity column must be provided when using DataFrames as data"
         )
-
-
-def make_list(element) -> list:
-    """Wraps element in list, if element not a list already
-
-    Parameters
-    ----------
-    element
-
-    Returns
-    -------
-    list
-    """
-    if isinstance(element, (int, float)):
-        element = [element]
-    elif isinstance(element, list):
-        pass
-    else:
-        raise ValueError("Unrecognized parameter format")
-    return element
-
-
-def calculate_list_intersection(a: list, b: list) -> list:
-    """Calculates list intersections
-
-    Parameters
-    ----------
-    a: list
-
-    b: list
-
-    Returns
-    -------
-    list
-    """
-    if len(b) == 0:
-        return a
-    elif len(a) == 0:
-        return b
-    intersection = list(set(a).intersection(set(b)))
-    assert len(intersection) > 0
-    return intersection
 
 
 def get_tolerances_to_test(

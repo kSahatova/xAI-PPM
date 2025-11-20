@@ -1,7 +1,7 @@
 .vscode
 **/__pycache__
 **/.vscode
-**/.egg-info
+**/*.egg-info
 skpm
 data
 misc
@@ -9,3 +9,5 @@ output
 xai_ppm
 persisted_models
 preprocessing
+lempel_ziv_segmentation.ipynb
+trace_segmentation_test.ipynb

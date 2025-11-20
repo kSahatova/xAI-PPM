@@ -13,9 +13,10 @@
 #  limitations under the License.
 import pandas as pd
 from timeshap.explainer import pruning_statistics
-from timeshap.plot import plot_global_feat, plot_global_event
+from timeshap.plot.feature_level import plot_global_feat
+from timeshap.plot.event_level import plot_global_event
 import altair as alt
-from timeshap.plot import find_parameters_to_plot, filter_dataset
+from timeshap.plot.utils import find_parameters_to_plot, filter_dataset
 
 
 def plot_global_report(pruning_dict: dict,

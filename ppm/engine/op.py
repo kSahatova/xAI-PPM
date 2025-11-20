@@ -33,7 +33,6 @@ def train_step(
         for target in tracker.metrics
         if target.startswith("train")
     }
-    # total_targets = len(data_loader.dataset.traces)
     total_targets=0
     valid_positions = {}
     for batch, items in enumerate(data_loader):
@@ -45,21 +44,16 @@ def train_step(
             y_num.to(device),
         )
 
-        # Taking one outcome per case since it is propagated for the whole case before which contradicts with the loss function input
-        # y_cat = y_cat[:, -1, :]
         attention_mask = (x_cat[..., 0] != 0).long()
-        total_targets += y_cat.shape[0]  # attention_mask.sum().item()
+        total_targets += y_cat.shape[0]  
 
         optimizer.zero_grad()
-        # with torch.autocast(device_type=device, dtype=torch.float16):
         out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
 
         batch_loss = 0.0
-        # mask = attention_mask.bool().view(-1)
         loss = F.binary_cross_entropy(
             out,
             y_cat.to(torch.float),
-            # ignore_index=model.padding_idx,
             reduction="sum",
         )
         predictions = ((out.squeeze(1)) > 0.5).float()
@@ -68,7 +62,6 @@ def train_step(
         batch_loss += loss
         metrics["train_outcome"]["loss"] += loss.item()
         metrics["train_outcome"]["acc"] += acc
-        
         
         max_len = attention_mask.size(1)
         idxs = torch.arange(max_len).unsqueeze(0).to(device)  # [1, S]
@@ -86,8 +79,6 @@ def train_step(
             metrics["train_outcome"][f"acc_pos_{t}"] += acc_t.item()
             valid_positions.setdefault(f"acc_pos_{t}", 0)
             valid_positions[f"acc_pos_{t}"] += valid.sum().item()
-
-        # metrics["train_outcome"]["acc"] += acc
 
         batch_loss.backward()
         if grad_clip:
@@ -240,7 +231,8 @@ def train_engine(
                 }
                 save_checkpoint(
                     checkpoint=cpkt,
-                    experiment_id="{}_{}".format(config["log"], config["backbone"]),
+                    experiment_id="{}_{}_{}_{}".format(config["log"], config["backbone"], 
+                                                       config["categorical_targets"][0], config["log"].lower()),
                 )
 
         if activity_loss < best_loss:

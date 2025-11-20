@@ -13,7 +13,6 @@
 #  limitations under the License.
 import pandas as pd
 import numpy as np
-from timeshap.utils import make_list, calculate_list_intersection
 import altair as alt
 from typing import Tuple, Callable
 
@@ -85,6 +84,48 @@ def filter_dataset(data: pd.DataFrame,
                     data['NSamples'] == nsamples)
         ]
     return filtered_data
+
+
+def make_list(element) -> list:
+    """Wraps element in list, if element not a list already
+
+    Parameters
+    ----------
+    element
+
+    Returns
+    -------
+    list
+    """
+    if isinstance(element, (int, float)):
+        element = [element]
+    elif isinstance(element, list):
+        pass
+    else:
+        raise ValueError("Unrecognized parameter format")
+    return element
+
+
+def calculate_list_intersection(a: list, b: list) -> list:
+    """Calculates list intersections
+
+    Parameters
+    ----------
+    a: list
+
+    b: list
+
+    Returns
+    -------
+    list
+    """
+    if len(b) == 0:
+        return a
+    elif len(a) == 0:
+        return b
+    intersection = list(set(a).intersection(set(b)))
+    assert len(intersection) > 0
+    return intersection
 
 
 def find_parameters_to_plot(event_dict: dict,

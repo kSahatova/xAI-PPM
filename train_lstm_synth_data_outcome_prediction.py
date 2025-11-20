@@ -1,6 +1,7 @@
 import pprint
-import wandb
-# from wandb import WANDB_AVAILABLE
+import pickle
+import os.path as osp
+import pandas as pd
 
 import torch
 from torch.utils.data import DataLoader
@@ -8,8 +9,6 @@ from torch.utils.data import DataLoader
 from ppm.datasets.utils import continuous
 from ppm.datasets import ContinuousTraces, DatasetSchemas
 from ppm.datasets.event_logs import EventFeatures, EventLog, EventTargets
-
-from skpm.event_logs import BPI17
 
 from ppm.engine.op import train_engine
 from ppm.models import OutcomePredictor
@@ -33,51 +32,19 @@ NUMERICAL_FEATURES = [
     "week_of_year",
 ]
 
-PRETRAINED_CONFIGS = {
-    "gpt2": {
-        "name": "openai-community/gpt2",
-        "embedding_size": 768,
-        "hidden_size": 768,
-        "pretrained": True,
-        "fine_tuning_module_path": "h",
-    },
-    "pm-gpt2": {
-        "name": "models/pm-gpt2",
-        "embedding_size": 768,
-        "hidden_size": 768,
-        "pretrained": True,
-        "fine_tuning_module_path": "h",
-    },
-    "llama32-1b": {
-        "name": "meta-llama/Llama-3.2-1B",
-        "embedding_size": 2048,
-        "hidden_size": 2048,
-        "pretrained": True,
-        "fine_tuning_module_path": "layers",
-    },
-    "llama2-7b": {
-        "name": "meta-llama/Llama-2-7b-hf",
-        "embedding_size": 4096,
-        "hidden_size": 4096,
-        "pretrained": True,
-        "fine_tuning_module_path": "layers",
-    },
-    "qwen25-05b": {
-        "name": "Qwen/Qwen2.5-0.5B",
-        "embedding_size": 896,
-        "hidden_size": 896,
-        "pretrained": True,
-        "fine_tuning_module_path": "layers",
-    },
-}
-
-EVENT_LOGS = {"BPI17": BPI17}
 
 
 def main(training_config: dict):
-    log = EVENT_LOGS[training_config["log"]]()
 
-    labels_dict = {"O_Cancelled": 0, "O_Accepted": 1, "O_Refused": 2}
+    synt_data_dir = r"data\synthetic_data"
+    data_file = "dataloan_log_['choose_procedure']_100000_train_normal.csv"
+    file_path = osp.join(synt_data_dir, data_file)
+
+    with open(file_path, 'rb') as f:
+        train_normal = pickle.load(f)
+    log = 
+
+    labels_dict = {"cancel_application": 0, "receive_acceptance": 1}
     column_schema = getattr(DatasetSchemas, training_config["log"])()
     labeled_df = add_outcome_labels(log.dataframe, column_schema, labels_dict)
 
@@ -163,8 +130,7 @@ def main(training_config: dict):
         collate_fn=continuous,
     )
 
-    model_config = get_model_config(train_log, training_config, PRETRAINED_CONFIGS)
-    # TODO: adjust to the logic of next activity predcition (!remove this fast fix)
+    model_config = get_model_config(train_log, training_config)
     model_config.pop("categorical_targets", None)
     model_config.pop("numerical_targets", None)
     model = OutcomePredictor(**model_config).to(device=training_config["device"])
@@ -231,7 +197,7 @@ def main(training_config: dict):
 
 
 if __name__ == "__main__":
-    config_path = "configs/train_lstm_args_for_op.txt"
+    config_path = "configs/train_lstm_for_outcome_prediction.txt"
     args = parse_args(config_path)
 
     training_config = {

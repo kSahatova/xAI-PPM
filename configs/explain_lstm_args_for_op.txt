@@ -1,0 +1,11 @@
+--dataset=BPI17
+--categorical_targets=outcome
+--project_name=explain_lstm_bpic2017
+--device=cpu
+--backbone=rnn
+--rnn_type=lstm
+--embedding_size=16  
+--hidden_size=32  
+--n_layers=1  
+--batch_size=1 
+--strategy=concat

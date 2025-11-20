@@ -145,7 +145,6 @@ def plot_feat_barplot(
                     grid=True, title="Shapley Value", labelFontSize=15, titleFontSize=15
                 ),
             ),
-            # scale=alt.Scale(domain=[-0.5, 0.5])),
         )
     )
 

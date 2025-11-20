@@ -1,5 +1,85 @@
 import numpy as np
 from typing import List
+from ruptures.base import BaseCost
+import ruptures as rpt
+
+
+class TransitionCost(BaseCost):
+    """
+    Custom cost function for ruptures based on transition probabilities.
+    """
+
+    # avoid overriding BaseCost.model property - use a different attribute name
+    model = "custom"
+
+    def __init__(self, trans_matrix, min_size: int = 2):
+        self.trans_matrix = trans_matrix
+        self.min_size = min_size
+
+    def fit(self, signal):
+        """signal should be the trace"""
+        self.signal = signal
+        return self
+
+    def error(self, start, end):
+        """
+        Compute the cost (negative log-likelihood) of segment [start:end].
+        Lower cost = better fit.
+        """
+        segment = self.signal[start:end]
+
+        if len(segment) < 2:
+            return 0
+
+        # Compute negative log-likelihood
+        cost = 0
+        for i in range(len(segment) - 1):
+            from_activity = int(segment[i])
+            to_activity = int(segment[i + 1])
+            prob = self.trans_matrix[from_activity, to_activity]
+
+            if prob > 0:
+                cost -= np.log(prob)
+            else:
+                print(
+                    "Probaility  of the transition is zero:",
+                    from_activity,
+                    "->",
+                    to_activity,
+                )
+                cost += (
+                    10  # Penalty for unseen transitions # TODO: check this penalty!!
+                )
+        return cost
+
+
+def segment_trace(
+    trace: np.ndarray, cost_object: BaseCost, jump: int = 1, min_size: int = 1
+):
+    """
+    Segments the input trace with the transition based PELT algorithm
+    """
+    optimizer = rpt.Pelt(custom_cost=cost_object, jump=jump, min_size=min_size)
+    optimizer.fit(trace)
+
+    penalties = np.arange(0, 1, 0.01)
+    results = [optimizer._seg(penalty) for penalty in penalties]
+    cost_list = [sum(result.values()) for result in results]
+    seg_num_list = [len(result) for result in results]
+
+    best_aic = 1e10
+    best_penalty = 0
+    best_segmentation = {}
+
+    for i, (cost, segments_num) in enumerate(zip(cost_list, seg_num_list)):
+        aic = 2 * segments_num - 2 * np.log(cost)
+        if aic < best_aic:
+            best_aic = aic
+            best_penalty = penalties[i].round(3)
+            best_segmentation = results[i]
+
+    breakpoints = [tup[1] for tup in list(best_segmentation.keys())]
+    return {"breakpoints": breakpoints, "penalty": best_penalty}
 
 
 def segment_by_threshold(
