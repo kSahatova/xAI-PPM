@@ -1,6 +1,6 @@
 import numpy as np
 from tqdm import tqdm
-from typing import Optional
+from typing import Optional, Tuple, List
 import matplotlib.pyplot as plt
 
 import torch
@@ -50,8 +50,6 @@ class LSTMAETrainer:
                     y_cat.to(self.device),
                     y_num.to(self.device),
                 )
-
-                # attention_mask = (x_cat[..., 0] != 0).long()
                 
                 optimizer.zero_grad()
                 input = torch.concat([x_cat.float(), x_num.float()], dim=-1)
@@ -68,7 +66,7 @@ class LSTMAETrainer:
             
             # Validation
             if val_loader:
-                val_loss = self.evaluate(val_loader)
+                val_loss, _ = self.evaluate(val_loader)
                 self.val_losses.append(val_loss)
                 scheduler.step(val_loss)
                 
@@ -95,10 +93,11 @@ class LSTMAETrainer:
         if val_loader:
             self.model.load_state_dict(torch.load('best_lstm_ae.pth'))
     
-    def evaluate(self, data_loader: DataLoader) -> float:
+    def evaluate(self, data_loader: DataLoader) -> Tuple[float, List[float]]:
         """Evaluate the model on given data"""
         self.model.eval()
         criterion = nn.MSELoss()
+        losses = []
         total_loss = 0.0
         
         with torch.no_grad():
@@ -114,8 +113,10 @@ class LSTMAETrainer:
                 reconstructed, _ = self.model(input)
                 loss = criterion(reconstructed, input)
                 total_loss += loss.item()
+                losses.append(loss.item())
         
-        return total_loss / len(data_loader)
+        recon_error = total_loss / len(data_loader)
+        return recon_error, losses
     
     def plot_training_history(self):
         """Plot training and validation losses"""

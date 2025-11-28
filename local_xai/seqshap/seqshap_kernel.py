@@ -744,7 +744,7 @@ class SeqShapKernel(KernelExplainer):
             self.nsamplesRun += 1
 
     def solve(self, fraction_evaluated, dim):
-        eyAdj = self.linkfv(self.ey[:, dim]) - self.link.f(self.fnull[dim])
+        eyAdj = self.linkfv(self.ey[:, dim]) - self.link.f(self.fnull[dim])   # TODO: check the difference here
         s = np.sum(self.maskMatrix, 1)
 
         # do feature selection if we have not well enumerated the space

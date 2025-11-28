@@ -11,7 +11,7 @@ from ppm.datasets.event_logs import EventFeatures, EventLog, EventTargets
 from ppm.datasets.utils import continuous
 from ppm.utils import parse_args, prepare_data
 
-from utils.lstm_ae import LSTMAutoencoder
+from utils.ae_model import LSTMAutoencoder
 from utils.ae_trainer import LSTMAETrainer
 
 RANDOM_SEED = 42

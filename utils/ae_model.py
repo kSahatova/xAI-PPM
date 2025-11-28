@@ -84,7 +84,7 @@ class LSTMAutoencoder(nn.Module):
 
     def forward(self, x):
         """Forward pass through autoencoder"""
-        seq_len = x.size(1)
+        seq_len = x.shape[1]
         latent = self.encode(x)
         reconstructed = self.decode(latent, seq_len)
         return reconstructed, latent
