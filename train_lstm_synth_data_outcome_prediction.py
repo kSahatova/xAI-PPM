@@ -7,31 +7,29 @@ import torch
 from torch.utils.data import DataLoader
 
 from ppm.datasets.utils import continuous
-from ppm.datasets import ContinuousTraces, DatasetSchemas
+from ppm.datasets import ContinuousTraces
+from sklearn.preprocessing import StandardScaler
+from imblearn.under_sampling import RandomUnderSampler
+
 from ppm.datasets.event_logs import EventFeatures, EventLog, EventTargets
 
 from ppm.engine.op import train_engine
 from ppm.models import OutcomePredictor
 
-from ppm.utils import parse_args, add_outcome_labels, prepare_data, get_model_config
+from ppm.utils import parse_args, get_model_config
 
 
 RANDOM_SEED = 42
 torch.manual_seed(RANDOM_SEED)
 
-NUMERICAL_FEATURES = [
-    "accumulated_time",
-    "day_of_month",
-    "day_of_week",
-    "day_of_year",
-    "hour_of_day",
-    "min_of_hour",
-    "month_of_year",
-    "sec_of_min",
-    "secs_within_day",
-    "week_of_year",
+NUMERIC_FEATURES = [
+    "amount", 
+    "unc_quality", 
+    "est_quality", 
+    "interest_rate",
+    "discount_factor",
+    "elapsed_time"
 ]
-
 
 
 def main(training_config: dict):
@@ -40,34 +38,74 @@ def main(training_config: dict):
     data_file = "dataloan_log_['choose_procedure']_100000_train_normal.csv"
     file_path = osp.join(synt_data_dir, data_file)
 
+    # Read a file
     with open(file_path, 'rb') as f:
-        train_normal = pickle.load(f)
-    log = 
+        log = pickle.load(f)
+    # getting rid of the  default 'outcome' used for simulation purposes 
+    log = log.drop("outcome", axis=1)
+    
+    # Extract last activity of each case for the outcome feature generation
+    last_activities = log.sort_values(["case_nr", "timestamp"], ascending=True) \
+                        .groupby("case_nr")["activity"] \
+                        .last()
 
-    labels_dict = {"cancel_application": 0, "receive_acceptance": 1}
-    column_schema = getattr(DatasetSchemas, training_config["log"])()
-    labeled_df = add_outcome_labels(log.dataframe, column_schema, labels_dict)
+    # Outcome labels : 0 - cancel_application , 1 - receive_acceptance 
+    outcome = (last_activities == 'receive_acceptance').astype(int).rename("outcome")
+    labeled_df  =  log.merge(outcome, on='case_nr', how='left')
+    labeled_df = labeled_df.sort_values(by=["case_nr", "timestamp"])
+    
+    # Balance the dataset
+    case_nr_outcome = labeled_df.groupby('case_nr', as_index=False)['outcome'].last()
+    rus  = RandomUnderSampler(random_state=42)
+    case_nr_res, _ = rus.fit_resample(case_nr_outcome['case_nr'].values.reshape(-1, 1),  # type: ignore
+                                      case_nr_outcome['outcome'].values)
+    balanced_df = labeled_df[labeled_df['case_nr'].isin(case_nr_res.squeeze())]
 
-    # Remove O_Refused to convert the task to a binary classification
-    binary_labeled_df = labeled_df[labeled_df["outcome"] != 2]
-    print(
-        "Outcomes of the cases are ",
-        binary_labeled_df["last_o_activity"].unique().tolist(),
+    # Reduce number of features
+    included_features =  ["case_nr", "activity", "amount", "unc_quality", "est_quality", "timestamp", 
+                          "interest_rate", "discount_factor", "elapsed_time", "outcome"]
+    reduced_df = balanced_df.loc[:,  included_features]
+    reduced_df = reduced_df.sort_values(by=["case_nr"])
+
+    grouped = reduced_df.groupby("case_nr", as_index=False)["timestamp"].agg(
+        ["min", "max"]
     )
-    result = prepare_data(
-        binary_labeled_df,
-        log.unbiased_split_params,
-        NUMERICAL_FEATURES,
-        include_labels=True,
-    )
 
-    # prepare_data may return either (train, test) or (train, test, train_timestamps, test_timestamps)
-    if isinstance(result, tuple) and len(result) == 4:
-        train, test, train_timestamps, test_timestamps = result
-    elif isinstance(result, tuple) and len(result) == 2:
-        train, test = result
-    else:
-        raise ValueError("Unexpected return value from prepare_data()")
+    # Splitting into train and test
+    ### TEST SET ###
+    test_len = 0.2
+    first_test_case_nr = int(len(grouped) * (1 - test_len))
+    first_test_start_time = (
+        grouped["min"].sort_values().values[first_test_case_nr]
+    )
+    # retain cases that end after first_test_start time
+    test_case_nrs = grouped.loc[
+        grouped["max"].values >= first_test_start_time, "case_nr"
+    ]
+    test = reduced_df[reduced_df["case_nr"] \
+                      .isin(test_case_nrs)] \
+                      .sort_values(by=['case_nr', 'timestamp']) \
+                      .reset_index(drop=True)
+
+    #### TRAINING SET ###
+    train = reduced_df[~reduced_df["case_nr"] \
+                       .isin(test_case_nrs)] \
+                       .sort_values(by=['case_nr', 'timestamp']) \
+                       .reset_index(drop=True)
+    
+    train = train.drop(columns=["timestamp"], axis=1)
+    test = test.drop(columns=["timestamp"], axis=1)
+
+    # Filling in missing values
+    train['interest_rate'] = train['interest_rate'].fillna(0.0)
+    test['interest_rate'] = test['interest_rate'].fillna(0.0)
+    train['discount_factor'] = train['discount_factor'].fillna(0.0)
+    test['discount_factor'] = test['discount_factor'].fillna(0.0)
+
+    # Scaling numeric features
+    sc = StandardScaler()
+    train.loc[:, NUMERIC_FEATURES] = sc.fit_transform(train[NUMERIC_FEATURES])
+    test.loc[:, NUMERIC_FEATURES] = sc.transform(test[NUMERIC_FEATURES])
 
     event_features = EventFeatures(
         categorical=training_config["categorical_features"],
@@ -81,7 +119,7 @@ def main(training_config: dict):
 
     train_log = EventLog(
         dataframe=train,
-        case_id="case_id",
+        case_id="case_nr",
         features=event_features,
         targets=event_targets,
         train_split=True,
@@ -90,7 +128,7 @@ def main(training_config: dict):
 
     test_log = EventLog(
         dataframe=test,
-        case_id="case_id",
+        case_id="case_nr",
         features=event_features,
         targets=event_targets,
         train_split=False,
@@ -104,7 +142,6 @@ def main(training_config: dict):
         not in ["gpt2", "llama32-1b", "llama2-7b", "qwen25-05b"]
         else "cpu"
     )
-
     train_dataset = ContinuousTraces(
         log=train_log,
         refresh_cache=True,
@@ -197,7 +234,7 @@ def main(training_config: dict):
 
 
 if __name__ == "__main__":
-    config_path = "configs/train_lstm_for_outcome_prediction.txt"
+    config_path = "configs/train_lstm_args_for_op_synth_data.txt"
     args = parse_args(config_path)
 
     training_config = {
@@ -228,7 +265,7 @@ if __name__ == "__main__":
         # features and tasks
         "categorical_features": args.categorical_features,
         "continuous_features": (
-            NUMERICAL_FEATURES
+            NUMERIC_FEATURES
             if (
                 args.continuous_features is not None
                 and "all" in args.continuous_features

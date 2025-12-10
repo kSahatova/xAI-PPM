@@ -381,3 +381,4 @@ def calculate_accuracy(model: torch.nn.Module, data_loader: DataLoader, device: 
                 # accuracy += acc
 
     print("Accuracy of the model: {:.3%}".format(accuracy / total_targets))
+

@@ -1,0 +1,16 @@
+--dataset=synthetic
+--categorical_targets=outcome
+--project_name=train_lstm_synth
+--persist_model
+--device=cpu
+--backbone=rnn
+--rnn_type=lstm
+--embedding_size=16  
+--hidden_size=32  
+--n_layers=1 
+--lr=1.0e-3
+--batch_size=64 
+--weight_decay=0.1
+--grad_clip=5.0
+--epochs=10
+--strategy=concat
