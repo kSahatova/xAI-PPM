@@ -272,7 +272,7 @@ class OutcomePredictor(nn.Module):
             x = x.last_hidden_state
         elif isinstance(x, tuple):
             x, h = x
-            h = tuple([h_.detach() for h_ in h])
+            # h = tuple([h_.detach() for h_ in h])
             x = pad_packed_sequence(x, batch_first=True)[0]
         else:
             raise ValueError("Invalid output from backbone.")

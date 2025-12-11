@@ -45,21 +45,21 @@ def train_step(
         )
 
         attention_mask = (x_cat[..., 0] != 0).long()
-        total_targets += y_cat.shape[0]  
+        total_targets += attention_mask.sum() #y_cat.shape[0]  
 
         optimizer.zero_grad()
-        out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
+        out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask) # sigmoid inside model
 
-        batch_loss = 0.0
+        # to consider: weighted loss over time to bias the model
+        # toward early predictions
         loss = F.binary_cross_entropy(
-            out,
-            y_cat.to(torch.float),
+            out.squeeze()[attention_mask.bool()],
+            y_cat.squeeze()[attention_mask.bool()].to(torch.float),
             reduction="sum",
         )
         predictions = ((out.squeeze(1)) > 0.5).float()
-        acc = (predictions.view(-1) == y_cat.view(-1)).sum().item()
+        acc = (predictions.squeeze()[attention_mask.bool()] == y_cat.squeeze()[attention_mask.bool()]).sum().item()
 
-        batch_loss += loss
         metrics["train_outcome"]["loss"] += loss.item()
         metrics["train_outcome"]["acc"] += acc
         
@@ -80,7 +80,7 @@ def train_step(
             valid_positions.setdefault(f"acc_pos_{t}", 0)
             valid_positions[f"acc_pos_{t}"] += valid.sum().item()
 
-        batch_loss.backward()
+        loss.backward()
         if grad_clip:
             clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
@@ -120,7 +120,7 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
 
             # y_cat = y_cat[:, -1, :]
             attention_mask = (x_cat[..., 0] != 0).long()
-            total_targets += y_cat.shape[0]  # attention_mask.sum().item()
+            total_targets += attention_mask.sum().item()
 
             # with torch.autocast(device_type=device, dtype=torch.float16):
             out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
@@ -129,13 +129,12 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
             # mask = attention_mask.bool().view(-1)
 
             loss = F.binary_cross_entropy(
-                out,
-                y_cat.to(torch.float),
-                # ignore_index=model.padding_idx,
+                out.squeeze()[attention_mask.bool()],
+                y_cat.squeeze()[attention_mask.bool()].to(torch.float),
                 reduction="sum",
             )
             predictions = ((out.squeeze(1)) > 0.5).float()
-            acc = (predictions.squeeze() == y_cat.squeeze()).sum().item()
+            acc = (predictions.squeeze()[attention_mask.bool()] == y_cat.squeeze()[attention_mask.bool()]).sum().item()
 
             batch_loss += loss
             metrics["test_outcome"]["loss"] += loss.item()
