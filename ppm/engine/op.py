@@ -53,12 +53,12 @@ def train_step(
         # to consider: weighted loss over time to bias the model
         # toward early predictions
         loss = F.binary_cross_entropy(
-            out.squeeze()[attention_mask.bool()],
-            y_cat.squeeze()[attention_mask.bool()].to(torch.float),
+            out.squeeze(-1)[attention_mask.bool()],
+            y_cat.squeeze(-1)[attention_mask.bool()].to(torch.float),
             reduction="sum",
         )
-        predictions = ((out.squeeze(1)) > 0.5).float()
-        acc = (predictions.squeeze()[attention_mask.bool()] == y_cat.squeeze()[attention_mask.bool()]).sum().item()
+        predictions = ((out.squeeze(-1)) > 0.5).float()
+        acc = (predictions.squeeze(-1)[attention_mask.bool()] == y_cat.squeeze(-1)[attention_mask.bool()]).sum().item()
 
         metrics["train_outcome"]["loss"] += loss.item()
         metrics["train_outcome"]["acc"] += acc
@@ -129,12 +129,12 @@ def eval_step(model, data_loader, tracker: MetricsTracker, device="cuda"):
             # mask = attention_mask.bool().view(-1)
 
             loss = F.binary_cross_entropy(
-                out.squeeze()[attention_mask.bool()],
-                y_cat.squeeze()[attention_mask.bool()].to(torch.float),
+                out.squeeze(-1)[attention_mask.bool()],
+                y_cat.squeeze(-1)[attention_mask.bool()].to(torch.float),
                 reduction="sum",
             )
-            predictions = ((out.squeeze(1)) > 0.5).float()
-            acc = (predictions.squeeze()[attention_mask.bool()] == y_cat.squeeze()[attention_mask.bool()]).sum().item()
+            predictions = ((out.squeeze(-1)) > 0.5).float()
+            acc = (predictions.squeeze(-1)[attention_mask.bool()] == y_cat.squeeze(-1)[attention_mask.bool()]).sum().item()
 
             batch_loss += loss
             metrics["test_outcome"]["loss"] += loss.item()
