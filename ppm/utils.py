@@ -6,7 +6,8 @@ from typing import Tuple, List, Optional
 import torch
 from torch.utils.data import DataLoader
 
-from peft import LoraConfig, TaskType
+from imblearn.under_sampling import RandomUnderSampler
+
 from skpm.event_logs.split import unbiased
 from ppm.datasets.event_logs import EventLog
 from ppm.datasets import DatasetColumnSchema
@@ -88,7 +89,7 @@ def fetch_experiments(project="cosmo-v4"):
     return experiments
 
 
-def parse_args(config_path: str=""):
+def parse_args(config_path: str = ""):
     parser = argparse.ArgumentParser(fromfile_prefix_chars="@")
     parser.add_argument("--dataset", type=str, default="BPI17")
     parser.add_argument("--wandb", action="store_true", default=False)
@@ -154,13 +155,16 @@ def parse_args(config_path: str=""):
         default=None,
         help="List of layer indices to freeze. If None, all layers are frozen.",
     )
-    
+
     return parser.parse_args([f"@{config_path}"])
 
 
 def add_outcome_labels(
-    log_df: pd.DataFrame, col_schema: DatasetColumnSchema, 
-    labels_dict: dict, resource_freq_threshold: int=10, max_category_levels: int=10
+    log_df: pd.DataFrame,
+    col_schema: DatasetColumnSchema,
+    labels_dict: dict,
+    resource_freq_threshold: int = 10,
+    max_category_levels: int = 10,
 ) -> pd.DataFrame:
     """
     Adds labels according to the provided dictionary. Labels are assigned to cases based on the last activity
@@ -176,15 +180,18 @@ def add_outcome_labels(
     label_col = col_schema.label_col
     cat_cols = col_schema.cat_cols
 
-
     # Optimize: Filter once, use stable sort if needed, chain operations
-    last_o_events = (dt_labeled[dt_labeled.loc[:, "EventOrigin"] == "Offer"]
-                    .sort_values(timestamp, ascending=True, kind='mergesort')
-                    .groupby(case_id)[activity]
-                    .last()
-                    .rename("last_o_activity"))
-    
-    dt_labeled = dt_labeled.merge(last_o_events, left_on=case_id, right_index=True, how='inner')
+    last_o_events = (
+        dt_labeled[dt_labeled.loc[:, "EventOrigin"] == "Offer"]
+        .sort_values(timestamp, ascending=True, kind="mergesort")
+        .groupby(case_id)[activity]
+        .last()
+        .rename("last_o_activity")
+    )
+
+    dt_labeled = dt_labeled.merge(
+        last_o_events, left_on=case_id, right_index=True, how="inner"
+    )
     dt_labeled = dt_labeled[dt_labeled.last_o_activity.isin(relevant_offer_events)]
 
     dt_labeled[label_col] = dt_labeled["last_o_activity"].map(labels_dict)
@@ -196,9 +203,7 @@ def add_outcome_labels(
     grouped = dt_labeled.groupby(case_id)
 
     # Fill missing values
-    cols_to_fill = [
-        col for col in core_cols if col in dt_labeled.columns
-    ]
+    cols_to_fill = [col for col in core_cols if col in dt_labeled.columns]
     dt_labeled[cols_to_fill] = grouped[cols_to_fill].ffill()
     dt_labeled[cat_cols] = dt_labeled[cat_cols].fillna("missing")
     dt_labeled = dt_labeled.fillna(0)
@@ -218,7 +223,7 @@ def add_outcome_labels(
             if len(counts) > max_category_levels:
                 top_categories = counts.index[:max_category_levels]
                 dt_labeled.loc[~dt_labeled[col].isin(top_categories), col] = "other"
-    
+
     return dt_labeled
 
 
@@ -227,10 +232,12 @@ def prepare_data(
     unbiased_split_params: dict,
     numerical_features: List[str],
     return_timestamps: bool = False,
-    include_labels: bool = False
+    include_labels: bool = False,
 ):
-    if include_labels: 
-        df = df.loc[:, ["case:concept:name", "concept:name", "time:timestamp", "outcome"]]
+    if include_labels:
+        df = df.loc[
+            :, ["case:concept:name", "concept:name", "time:timestamp", "outcome"]
+        ]
     else:
         df = df.loc[:, ["case:concept:name", "concept:name", "time:timestamp"]]
     cases_to_drop = df.groupby("case:concept:name").size() > 2
@@ -274,6 +281,91 @@ def prepare_data(
     return train, test
 
 
+def prepare_simbank_data(
+    df: pd.DataFrame,
+    numerical_features: List[str],
+    unbiased_split_params: dict = {'test_ratio': 0.2},
+):
+    # Extract last activity of each case for the outcome feature generation
+    last_activities = (
+        df.sort_values(["case_nr", "timestamp"], ascending=True)
+        .groupby("case_nr")["activity"]
+        .last()
+    )
+
+    # Outcome labels : 0 - cancel_application , 1 - receive_acceptance
+    outcome = (last_activities == "receive_acceptance").astype(int).rename("outcome")
+    labeled_df = df.merge(outcome, on="case_nr", how="left")
+    labeled_df = labeled_df.sort_values(by=["case_nr", "timestamp"])
+
+    # Balance the dataset
+    case_nr_outcome = labeled_df.groupby("case_nr", as_index=False)["outcome"].last()
+    rus = RandomUnderSampler(random_state=42)
+    case_nr_res, _ = rus.fit_resample(
+        case_nr_outcome["case_nr"].values.reshape(-1, 1),  # type: ignore
+        case_nr_outcome["outcome"].values,
+    )
+    balanced_df = labeled_df[labeled_df["case_nr"].isin(case_nr_res.squeeze())]
+
+    # Reduce number of features
+    included_features = [
+        "case_nr",
+        "activity",
+        "amount",
+        "unc_quality",
+        "est_quality",
+        "timestamp",
+        "interest_rate",
+        "discount_factor",
+        "elapsed_time",
+        "outcome",
+    ]
+    reduced_df = balanced_df.loc[:, included_features]
+    reduced_df = reduced_df.sort_values(by=["case_nr"])
+
+    grouped = reduced_df.groupby("case_nr", as_index=False)["timestamp"].agg(
+        ["min", "max"]
+    )
+
+    # Splitting into train and test
+    ### TEST SET ###
+    test_ratio = unbiased_split_params['test_ratio']
+    first_test_case_nr = int(len(grouped) * (1 - test_ratio))
+    first_test_start_time = grouped["min"].sort_values().values[first_test_case_nr]
+    # retain cases that end after first_test_start time
+    test_case_nrs = grouped.loc[
+        grouped["max"].values >= first_test_start_time, "case_nr"
+    ]
+    test = (
+        reduced_df[reduced_df["case_nr"].isin(test_case_nrs)]
+        .sort_values(by=["case_nr", "timestamp"])
+        .reset_index(drop=True)
+    )
+
+    #### TRAINING SET ###
+    train = (
+        reduced_df[~reduced_df["case_nr"].isin(test_case_nrs)]
+        .sort_values(by=["case_nr", "timestamp"])
+        .reset_index(drop=True)
+    )
+
+    train = train.drop(columns=["timestamp"], axis=1)
+    test = test.drop(columns=["timestamp"], axis=1)
+
+    # Filling in missing values
+    train["interest_rate"] = train["interest_rate"].fillna(0.0)
+    test["interest_rate"] = test["interest_rate"].fillna(0.0)
+    train["discount_factor"] = train["discount_factor"].fillna(0.0)
+    test["discount_factor"] = test["discount_factor"].fillna(0.0)
+
+    # Scaling numeric features
+    sc = StandardScaler()
+    train.loc[:, numerical_features] = sc.fit_transform(train[numerical_features])
+    test.loc[:, numerical_features] = sc.transform(test[numerical_features])
+
+    return train, test
+
+
 def get_fine_tuning(fine_tuning, **kwargs):
     if fine_tuning == "lora":
         target_modules = (
@@ -308,48 +400,49 @@ def get_fine_tuning(fine_tuning, **kwargs):
 
 
 def get_model_config(
-    train_log: EventLog, training_config: dict, pretrained_configs: Optional[dict] = {}
+    log: EventLog, config: dict, pretrained_configs: Optional[dict] = {}
 ):
-    pretrained_config = pretrained_configs.get(training_config["backbone"], {})
+    pretrained_config = pretrained_configs.get(config["backbone"], {})
     if pretrained_config:
         fine_tuning = get_fine_tuning(
-            fine_tuning=training_config["fine_tuning"],
-            r=training_config["r"],
-            lora_alpha=training_config["lora_alpha"],
-            freeze_layers=training_config["freeze_layers"],
+            fine_tuning=config["fine_tuning"],
+            r=config["r"],
+            lora_alpha=config["lora_alpha"],
+            freeze_layers=config["freeze_layers"],
             fine_tuning_module_path=pretrained_config["fine_tuning_module_path"],
-            model=training_config["backbone"],
+            model=config["backbone"],
         )
         pretrained_config["fine_tuning"] = fine_tuning
-    if training_config["backbone"] != "rnn":
+    if config["backbone"] != "rnn":
         backbone_hf_name = pretrained_config["name"]
     else:
         backbone_hf_name = "rnn"
     return {
-        "embedding_size": training_config["embedding_size"],
-        "categorical_cols": train_log.features.categorical,
-        "categorical_sizes": train_log.categorical_sizes,
-        "numerical_cols": train_log.features.numerical,
-        "categorical_targets": train_log.targets.categorical,
-        "numerical_targets": train_log.targets.numerical,
-        "padding_idx": train_log.special_tokens["<PAD>"],
-        "strategy": training_config["strategy"],
-        "pos_encoding_form": training_config.get("pos_encoding_form", None),
-        "pos_encoding_strategy": training_config.get("pos_encoding_strategy", ""),
+        "embedding_size": config["embedding_size"],
+        "categorical_cols": log.features.categorical,
+        "categorical_sizes": log.categorical_sizes,
+        "numerical_cols": log.features.numerical,
+        "categorical_targets": log.targets.categorical,
+        "numerical_targets": log.targets.numerical,
+        "padding_idx": log.special_tokens["<PAD>"],
+        "strategy": config["strategy"],
+        "pos_encoding_form": config.get("pos_encoding_form", None),
+        "pos_encoding_strategy": config.get("pos_encoding_strategy", ""),
         "backbone_name": backbone_hf_name,
         "backbone_pretrained": True if pretrained_config else False,
         "backbone_finetuning": pretrained_config.get("fine_tuning", None),
-        "backbone_type": training_config.get("rnn_type", None),
-        "backbone_hidden_size": training_config["hidden_size"],
-        "backbone_n_layers": training_config.get("n_layers", None),
-        "device": training_config["device"],
+        "backbone_type": config.get("rnn_type", None),
+        "backbone_hidden_size": config["hidden_size"],
+        "backbone_n_layers": config.get("n_layers", None),
+        "device": config["device"],
     }
 
 
-def calculate_accuracy(model: torch.nn.Module, data_loader: DataLoader, device: str):
+def calculate_accuracy(model: torch.nn.Module, data_loader: DataLoader, device: str, task='outcome_prediction'):
     """
-    calculates accuracy of the provided model on the given data loader
+    Calculates accuracy of the provided model on the given data loader
     """
+ 
     model.eval()
     total_targets = 0
     accuracy = 0
@@ -381,4 +474,3 @@ def calculate_accuracy(model: torch.nn.Module, data_loader: DataLoader, device: 
                 # accuracy += acc
 
     print("Accuracy of the model: {:.3%}".format(accuracy / total_targets))
-

@@ -28,7 +28,7 @@ def plot_segment_shap_heatmap(segment_names, segment_level_sv, save_path=None):
         linecolor="white",
     )
     ax.set_xlabel("SHAP values")
-    ax.set_title("Segment-level SHAP value explanations")
+    # ax.set_title("Segment-level SHAP value explanations")
     if save_path is not None:
         plt.savefig(save_path, bbox_inches="tight", dpi=300)
-    plt.show()
+    return fig

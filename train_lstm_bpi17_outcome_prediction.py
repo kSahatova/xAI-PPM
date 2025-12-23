@@ -275,9 +275,7 @@ if __name__ == "__main__":
         "pos_encoding_form": args.pos_encoding_form,
         "pos_encoding_strategy": args.pos_encoding_strategy,
     }
-    # if is_duplicate(training_config):
-    #     print("Duplicate configuration. Skipping...")
-    #     exit(0)
+
 
     pprint.pprint(training_config)
     print("=" * 80)

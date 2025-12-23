@@ -64,7 +64,7 @@ def train_step(
         metrics["train_outcome"]["acc"] += acc
         
         max_len = attention_mask.size(1)
-        idxs = torch.arange(max_len).unsqueeze(0).to(device)  # [1, S]
+        idxs = torch.arange(max_len).unsqueeze(0).to(device) # [1, S]
         lengths = attention_mask.sum(dim=-1)  # [B]
         mask = idxs < lengths.unsqueeze(1)  # [B, S]
         

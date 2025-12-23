@@ -281,8 +281,4 @@ class OutcomePredictor(nn.Module):
         out = self.classifier(x)
         out = torch.sigmoid(out)
 
-        # out = {}
-        # for target in self.out_layers:
-        #     out[target] = torch.sigmoid(self.out_layers[target](x))
-
         return out, h

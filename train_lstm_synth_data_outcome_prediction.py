@@ -22,7 +22,7 @@ from ppm.utils import parse_args, get_model_config
 RANDOM_SEED = 42
 torch.manual_seed(RANDOM_SEED)
 
-NUMERIC_FEATURES = [
+NUMERICAL_FEATURES = [
     "amount", 
     "unc_quality", 
     "est_quality", 
@@ -104,8 +104,8 @@ def main(training_config: dict):
 
     # Scaling numeric features
     sc = StandardScaler()
-    train.loc[:, NUMERIC_FEATURES] = sc.fit_transform(train[NUMERIC_FEATURES])
-    test.loc[:, NUMERIC_FEATURES] = sc.transform(test[NUMERIC_FEATURES])
+    train.loc[:, NUMERICAL_FEATURES] = sc.fit_transform(train[NUMERICAL_FEATURES])
+    test.loc[:, NUMERICAL_FEATURES] = sc.transform(test[NUMERICAL_FEATURES])
 
     event_features = EventFeatures(
         categorical=training_config["categorical_features"],
@@ -265,7 +265,7 @@ if __name__ == "__main__":
         # features and tasks
         "categorical_features": args.categorical_features,
         "continuous_features": (
-            NUMERIC_FEATURES
+            NUMERICAL_FEATURES
             if (
                 args.continuous_features is not None
                 and "all" in args.continuous_features
