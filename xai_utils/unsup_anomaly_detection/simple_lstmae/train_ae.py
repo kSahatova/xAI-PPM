@@ -11,8 +11,8 @@ from ppm.datasets.event_logs import EventFeatures, EventLog, EventTargets
 from ppm.datasets.utils import continuous
 from ppm.utils import parse_args, prepare_data
 
-from utils.ae_model import LSTMAutoencoder
-from utils.ae_trainer import LSTMAETrainer
+from utils.unsup_anomaly_detection.simple_lstmae.ae_model import LSTMAutoencoder
+from utils.unsup_anomaly_detection.simple_lstmae.ae_trainer import LSTMAETrainer
 
 RANDOM_SEED = 42
 torch.manual_seed(RANDOM_SEED)
@@ -148,7 +148,9 @@ if __name__ == "__main__":
         "hidden_size": args.hidden_size,
         "n_layers": args.n_layers,
         # hyperparameters
-        "batch_size": args.batch_size,       
+        "batch_size": args.batch_size, 
+        "epochs": args.epochs,
+        "lr": args.lr,
         # features and tasks
         "categorical_features": args.categorical_features,
         "continuous_features": (
@@ -162,4 +164,8 @@ if __name__ == "__main__":
         "categorical_targets": args.categorical_targets,
         "continuous_targets": args.continuous_targets,
         "strategy": args.strategy,
+        "hidden_dim": 64,
+        "lattent_dim": 32
     }
+
+    main(config)

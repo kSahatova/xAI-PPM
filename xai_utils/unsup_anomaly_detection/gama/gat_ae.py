@@ -23,12 +23,13 @@ class PositionalEncoder(nn.Module):
                         math.cos(pos / (10000 ** ((2 * (i + 1)) / input_dim)))
         self.register_buffer('pe', pe)
 
-    def forward(self, x,batch_size):
+    def forward(self, x, batch_size):
         # make embeddings relatively larger
         x = x * math.sqrt(self.input_dim)
         # add constant to embedding
-        batch_pe= self.pe.repeat((batch_size,1,1))
-        x = x + batch_pe.reshape((-1,batch_pe.shape[2]))
+        batch_pe = self.pe.repeat((batch_size, 1, 1))
+        # if x.shape
+        x = x + batch_pe.reshape((-1, batch_pe.shape[2]))
         return self.dropout(x)
 
 
@@ -63,9 +64,6 @@ class GAT_Encoder(nn.Module):
 
 
 class Attention(nn.Module):
-    '''
-    点积注意力
-    '''
     def __init__(self, enc_hid_dim, dec_hid_dim):
         super().__init__()
         self.hidden=enc_hid_dim
@@ -225,7 +223,7 @@ class GAT_AE(nn.Module):
         :param graphs: It is a graph with multiple attributes, where each attribute is represented as a graph.
         :param Xs:It consists of multiple attributes, each attribute being an X: the list length is len(attribute_dims), 
                   and the length of each element in the list is [batch_size, seq_len].
-        :param mask:(batch_size,seq_len)
+        :param mask:(batch_size, seq_len)
         :param batch_size:
         :return:
         '''
@@ -241,16 +239,15 @@ class GAT_AE(nn.Module):
                 attr_reconstruction_outputs.append(torch.zeros(self.max_seq_len, batch_size, output_dim).to(Xs[0].device))  # 存储decoder的所有输出
             else:
                 attr_reconstruction_outputs.append(torch.zeros(self.max_seq_len, batch_size, output_dim))
-            enc_output_ = self.encoders[i](graph,batch_size) # enc_output_:[batch_size, self.max_seq_len , hidden_dim]
+            enc_output_ = self.encoders[i](graph, batch_size) # enc_output_:[batch_size, self.max_seq_len , hidden_dim]
             enc_output_ = enc_output_.permute((1,0,2)) # enc_output_:[self.max_seq_len ,batch_size , hidden_dim]
-            s_= enc_output_.mean(0)  # Take the average of all nodes as the input to the decoder's first hidden state: s_:[batch_size, hidden_dim]
+            s_ = enc_output_.mean(0)  # Take the average of all nodes as the input to the decoder's first hidden state: s_:[batch_size, hidden_dim]
             if enc_output is None:
                 enc_output = enc_output_
             else:
                 enc_output = torch.cat((enc_output, enc_output_), dim=0)
-            # enc_output = [self.max_seq_len*len(self.attribute_dims), batch_size, hidden_dim ]
+            # enc_output = [self.max_seq_len*len(self.attribute_dims), batch_size, hidden_dim]
             s.append(s_)
-
 
         for i, dim in enumerate(self.attribute_dims):
             if i == 0:

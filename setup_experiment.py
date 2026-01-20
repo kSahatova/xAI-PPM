@@ -133,3 +133,14 @@ def setup_model(config: dict, log: EventLog, model_name: str = "outcome_predicto
     return model
 
 
+def extract_one_offer_cases(trace_set, o_created_ind=15):
+    """Extracts case ids with one and multiple offers"""
+    one_offer_ids = []
+    multiple_offers_ids = {}
+    for i, trace in enumerate(trace_set):
+        offered_times = np.where(trace == o_created_ind)[0].size 
+        if offered_times == 1:
+            one_offer_ids.append(i)
+        else:
+            multiple_offers_ids[i] = offered_times
+    return one_offer_ids, multiple_offers_ids

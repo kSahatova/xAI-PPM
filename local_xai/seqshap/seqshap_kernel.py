@@ -286,7 +286,7 @@ class SeqShapKernel(KernelExplainer):
                 self.varyingFeatureGroups = [
                     groups[i] for i in self.varyingInds
                 ]
-                self.M = len(self.varyingFeatureGroups)  
+                self.M = len(self.varyingFeatureGroups)
                 
             # convert to numpy array as it is much faster if not jagged array (all groups of same length)
             if isinstance(self.varyingFeatureGroups, list) and all(

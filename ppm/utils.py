@@ -140,7 +140,7 @@ def parse_args(config_path: str = ""):
         "--rnn_type", type=str, default="lstm", choices=["lstm", "gru", "rnn"]
     )
 
-    """ if fine-tuning """
+    """if fine-tuning """
     parser.add_argument(
         "--fine_tuning", type=str, default=None, choices=["lora", "freeze"]
     )

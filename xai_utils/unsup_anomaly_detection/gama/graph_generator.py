@@ -17,26 +17,27 @@ def to_categorical(y, num_classes=None, dtype='float32'):
     categorical[np.arange(n), y] = 1
     output_shape = input_shape + (num_classes,)
     categorical = np.reshape(categorical, output_shape)
+    
     return categorical
 
 
-def graph_generator(adjacency_matrix, padded_acivities, trace_lens: List[int], beta: float = 0.005):
+def graph_generator(adjacency_matrix, padded_activities, trace_lens: List[int], beta: float = 0.005):
 
     num_cases = len(trace_lens)
     adjacency_matrix =  np.array(adjacency_matrix >=  beta* num_cases, dtype='int32')
-    onehot_encoded = to_categorical(padded_acivities)
+    onehot_encoded = to_categorical(padded_activities, num_classes=adjacency_matrix.shape[0])
     node_xs = []
-    edge_indexs = []
+    edge_indeces = []
 
     for case_index in range(num_cases):
         edge = []
         xs = torch.tensor(onehot_encoded[case_index, :, ])
 
         if  trace_lens[case_index] > 1:
-            node = padded_acivities[case_index, : trace_lens[case_index]]
+            node = padded_activities[case_index, : trace_lens[case_index]]
             for activity_index in range(0,  trace_lens[case_index]):
-                out = np.argwhere(adjacency_matrix[padded_acivities[case_index, activity_index]] == 1).flatten()
-                a = set(node.numpy())
+                out = np.argwhere(adjacency_matrix[padded_activities[case_index, activity_index]] == 1).flatten()
+                a = set(node)
                 b = set(out)
                 if activity_index + 1 < trace_lens[case_index]:
                     edge.append([activity_index, activity_index+1])
@@ -47,6 +48,7 @@ def graph_generator(adjacency_matrix, padded_acivities, trace_lens: List[int], b
 
         edge_index = torch.tensor(edge, dtype=torch.long)
         node_xs.append(xs)
-        edge_indexs.append(edge_index.T)
-    
-    
+        edge_indeces.append(edge_index.T)
+
+    return node_xs, edge_indeces
+

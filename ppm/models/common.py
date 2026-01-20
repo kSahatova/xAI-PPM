@@ -90,8 +90,8 @@ class InLayer(nn.Module):
 
             # add positional encoding
             if self.pos_encoding_form is not None:
-                pos_encoded = self.position_encoder(embedded)  
-                encoded_features = None         
+                pos_encoded = self.position_encoder(embedded)
+                encoded_features = None
                 
                 if self.pos_encoding_strategy == "concat":
                     batch_size = embedded.size(0)

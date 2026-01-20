@@ -236,18 +236,7 @@ class OutcomePredictor(nn.Module):
                 )
                 self.backbone.apply(self.backbone._init_weights)
 
-        # define output layer(s)
-        # self.out_layers = nn.ModuleDict()
-        # for target in categorical_targets:
-        #     self.out_layers[target] = OutLayer(
-        #         input_size=backbone_hidden_size,
-        #         output_size=1,
-        #     )
-        # for target in numerical_targets:
-        #     self.out_layers[target] = OutLayer(
-        #         input_size=backbone_hidden_size,
-        #         output_size=1,
-        #     )
+
 
         self.classifier = OutLayer(
                 input_size=backbone_hidden_size,

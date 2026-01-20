@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 from sklearn.cluster import KMeans
-from .autoencoder import AutoEncoder
+from .autoencoder import AutoEncoder, LSTM_AutoEncoder
 
 
 class Explainer:
@@ -42,9 +42,10 @@ class Explainer:
         **kwargs: Keyword arguments for tf.keras.Model.compile method
         :return: Tensorflow model for explanation of time series data
         """
-        explainer = AutoEncoder(
+        explainer = LSTM_AutoEncoder(
             original_dim=self.input_shape,
             latent_dim=self.latent_dim)
+        
         return explainer
 
     def fit_explainer(self, classifier, X):
