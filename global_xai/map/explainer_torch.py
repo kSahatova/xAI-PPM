@@ -3,10 +3,13 @@ from xml.sax import parseString
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from tqdm import tqdm
 
+from sklearn.preprocessing import StandardScaler
 import torch
-from torch.utils.data import DataLoader
 from torch import nn
+from torch.nn.utils import clip_grad_norm_
+from torch.utils.data import DataLoader
 from sklearn.cluster import KMeans
 from .autoencoder_torch import LSTMAutoencoder
 
@@ -17,6 +20,7 @@ class Explainer:
     def __init__(
         self,
         input_dim: int,
+        cat_vocab_size: int,
         output_directory: Path,
         epochs: int,
         batch_size: int,
@@ -30,6 +34,7 @@ class Explainer:
         Initializes the explainer with specified settings
         """
         self.input_dim = input_dim
+        self.cat_vocab_size = cat_vocab_size
         self.output_directory = output_directory
         self.epochs = epochs
         self.batch_size = batch_size
@@ -53,7 +58,7 @@ class Explainer:
             hidden_dim=hidden_dim,
             latent_dim=self.latent_dim,
             num_layers=num_layers,
-            dropout=dropout,
+            cat_vocab_size=self.cat_vocab_size
         )
 
         return explainer
@@ -68,7 +73,7 @@ class Explainer:
         optimizer = torch.optim.Adam(self.explainer.parameters(), lr=1e-3)
         bce_loss = nn.BCELoss()
         mse_loss = nn.MSELoss()
-        # loss_metric  =
+        scaler = StandardScaler()
 
         # classifier's weights should not be updated
         classifier.eval()
@@ -80,8 +85,10 @@ class Explainer:
                 "sep_loss": 0.0,
                 "total_loss": 0.0,
             }
+            
+            for batch in tqdm(dataloader, total=len(dataloader), desc=f"Explainer Epoch {epoch+1}/{self.epochs}"):
+                optimizer.zero_grad()
 
-            for batch in dataloader:
                 x_cat, x_num, _, _ = batch
                 x_cat, x_num = (x_cat.to(self.device), x_num.to(self.device))
                 attention_mask = (x_cat[..., 0] != 0).long()
@@ -89,29 +96,65 @@ class Explainer:
                 out, _ = classifier(x_cat, x_num, attention_mask=attention_mask)
                 y_pred = (out.squeeze(1) > 0.5).float()
 
-                optimizer.zero_grad()
                 input = torch.concat([x_cat.float(), x_num.float()], dim=-1)
                 seq_len = input.shape[1]
 
-                latent = self.explainer.encode(input)
-                reconstructed = self.explainer.decode(latent, seq_len)
+                # # scale the input to avoid NaNs in the latent space
+                # x_cat_scaled = (scaler.fit_transform(input[:, :, 0].cpu().numpy()))
+                # x_cat_scaled  = torch.Tensor(x_cat_scaled.to_numpy()).unsqueeze(-1).to(self.device)
+                # input_scaled = torch.concat([x_cat_scaled, x_num], dim=-1)
+
+                latent = self.explainer.encode(input) # self.explainer.encode(input_scaled)
+                # reconstructed_cat, reconstructed_num = self.explainer.decode(latent, seq_len)
+                # reconstructed_cat = torch.nn.functional.softmax(reconstructed_cat, dim=-1)
+                # reconstructed_cat = torch.argmax(reconstructed_cat, dim=-1).unsqueeze(-1)
+                
+                # Decode - returns logits for categorical
+                reconstructed_cat_logits, reconstructed_num = self.explainer.decode(latent, seq_len)
+                
+                # Gumbel-Softmax (recommended)
+                temperature = 1.0  # Start high, can anneal over training
+                reconstructed_cat_soft = torch.nn.functional.gumbel_softmax(
+                    reconstructed_cat_logits, tau=temperature, hard=True, dim=-1
+                )
+                                
+                # Convert one-hot to indices for classifier input
+                x_cat_recon = torch.argmax(reconstructed_cat_soft, dim=-1).unsqueeze(-1)
+
 
                 x_cat_recon, x_num_recon = (
-                    reconstructed[:, :, 0:1].to(torch.long),
-                    reconstructed[:, :, 1:],
+                    x_cat_recon,
+                    reconstructed_num,
                 )
+                reconstructed = torch.concat([x_cat_recon.float(), x_num_recon.float()], dim=-1)
                 # attention_mask_recon = (x_cat_recon[..., 0] != 0).long()
                 out_recon, _ = classifier(
                     x_cat=x_cat_recon,
                     x_num=x_num_recon,
                     attention_mask=attention_mask,
                 )
+                # BCE fidelity loss - this is where gradients flow through classifier
+                # Clamp to avoid log(0) issues
+                y_pred_clamped = torch.clamp(y_pred, min=1e-7, max=1-1e-7)
+                out_recon_clamped = torch.clamp(out_recon, min=1e-7, max=1-1e-7)
 
                 sep_loss_result = self.cluster_regularization(latent) * self.sep_coef
                 mse_loss_result = mse_loss(reconstructed, input)
-                bce_loss_result = bce_loss(y_pred, out_recon)
-                loss = sep_loss_result + mse_loss_result + bce_loss_result
+                bce_loss_result = bce_loss(y_pred_clamped, out_recon_clamped)
+                loss = sep_loss_result + mse_loss_result + 0.01*bce_loss_result
                 loss.backward()
+                # clip_grad_norm_(self.explainer.parameters(), max_norm=1.0)
+                
+                # Check gradients for NaN or Inf values
+                # total_norm = 0.0
+                # for name, p in self.explainer.named_parameters():
+                #     if p.grad is not None:
+                #         grad_norm = p.grad.data.norm(2)
+                #         total_norm += grad_norm.item() ** 2
+
+                # total_norm = total_norm ** 0.5
+                # print(f"Total grad norm: {total_norm:.3e}")
+
                 optimizer.step()
 
                 # Update loss results for all terms
@@ -123,11 +166,12 @@ class Explainer:
             loss_info = {k: v / len(dataloader) for k, v in loss_info.items()}
 
             print(
-                "Epoch {} | loss: {:.5f}, mse_loss: {:.5f}, bce_loss: {:.5f}".format(
+                "Epoch {} | loss: {:.5f}, mse_loss: {:.5f}, bce_loss: {:.5f}, sep_loss: {:.5f}".format(
                     epoch,
                     loss_info["total_loss"],
                     loss_info["mse_loss"],
                     loss_info["bce_loss"],
+                    loss_info["sep_loss"]
                 )
             )
 

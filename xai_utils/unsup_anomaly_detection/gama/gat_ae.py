@@ -206,7 +206,7 @@ class GAT_AE(nn.Module):
         self.max_seq_len=max_seq_len
         self.attribute_dims=attribute_dims
         for i, dim in enumerate(attribute_dims):
-            encoders.append( GAT_Encoder(int(dim), hidden_dim, GAT_heads, max_seq_len ))
+            encoders.append(GAT_Encoder(int(dim), hidden_dim, GAT_heads, max_seq_len))
             if i == 0:
                 decoders.append(Decoder_act(int(attribute_dims[0] + 1), hidden_dim, decoder_num_layers,
                                             int(dim + 1)))
@@ -236,7 +236,7 @@ class GAT_AE(nn.Module):
             graph = graphs[i]
 
             if graph.is_cuda:
-                attr_reconstruction_outputs.append(torch.zeros(self.max_seq_len, batch_size, output_dim).to(Xs[0].device))  # 存储decoder的所有输出
+                attr_reconstruction_outputs.append(torch.zeros(self.max_seq_len, batch_size, output_dim).to(Xs[0].device)) 
             else:
                 attr_reconstruction_outputs.append(torch.zeros(self.max_seq_len, batch_size, output_dim))
             enc_output_ = self.encoders[i](graph, batch_size) # enc_output_:[batch_size, self.max_seq_len , hidden_dim]

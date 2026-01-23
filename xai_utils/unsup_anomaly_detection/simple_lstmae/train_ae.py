@@ -11,8 +11,8 @@ from ppm.datasets.event_logs import EventFeatures, EventLog, EventTargets
 from ppm.datasets.utils import continuous
 from ppm.utils import parse_args, prepare_data
 
-from utils.unsup_anomaly_detection.simple_lstmae.ae_model import LSTMAutoencoder
-from utils.unsup_anomaly_detection.simple_lstmae.ae_trainer import LSTMAETrainer
+from ae_model import LSTMAutoencoder
+from ae_trainer import LSTMAETrainer
 
 RANDOM_SEED = 42
 torch.manual_seed(RANDOM_SEED)

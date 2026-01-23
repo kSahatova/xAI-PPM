@@ -15,8 +15,8 @@ class LSTMAutoencoder(nn.Module):
         input_dim: int,
         hidden_dim: int,
         latent_dim: int,
+        cat_vocab_size: int,
         num_layers: int = 2,
-        dropout: float = 0.2,
     ):
         """
         Args:
@@ -32,6 +32,7 @@ class LSTMAutoencoder(nn.Module):
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
         self.num_layers = num_layers
+        self.cat_vocab_size = cat_vocab_size
 
         # Encoder
         self.encoder_lstm = nn.LSTM(
@@ -39,7 +40,6 @@ class LSTMAutoencoder(nn.Module):
             hidden_size=hidden_dim,
             num_layers=num_layers,
             batch_first=True,
-            dropout=dropout if num_layers > 1 else 0,
         )
         self.encoder_fc = nn.Linear(hidden_dim, latent_dim)
 
@@ -50,9 +50,12 @@ class LSTMAutoencoder(nn.Module):
             hidden_size=hidden_dim,
             num_layers=num_layers,
             batch_first=True,
-            dropout=dropout if num_layers > 1 else 0,
         )
-        self.decoder_output = nn.Linear(hidden_dim, input_dim)
+        self.decoder_output_cat = nn.Linear(hidden_dim, self.cat_vocab_size)
+        self.decoder_output_num = nn.Linear(hidden_dim, input_dim-1)
+
+        self.softmax_act = torch.nn.Softmax(dim=2)
+
 
     def encode(self, x):
         """Encode input sequence to latent representation"""
@@ -62,6 +65,7 @@ class LSTMAutoencoder(nn.Module):
         last_hidden = hidden[-1]  # (batch_size, hidden_dim)
         # latent = latent.unsqueeze(1).repeat(1, x.shape[1], 1)
         latent = self.encoder_fc(last_hidden)  # (batch_size, latent_dim)
+        # latent = latent / (torch.linalg.norm(latent, axis=-1, keepdims=True) + 1e-9)
         return latent
 
     def decode(self, latent, seq_len):
@@ -79,13 +83,16 @@ class LSTMAutoencoder(nn.Module):
         lstm_out, _ = self.decoder_lstm(hidden)
 
         # Output projection
-        output = self.decoder_output(lstm_out)  # (batch_size, seq_len, input_dim)
-        return output
+        cat_output = self.decoder_output_cat(lstm_out)  # (batch_size, seq_len, input_dim)
+        num_output = self.decoder_output_num(lstm_out)  # (batch_size, seq_len, input_dim)
+        return cat_output, num_output
 
     def forward(self, x):
         """Forward pass through autoencoder"""
         seq_len = x.shape[1]
         latent = self.encode(x)
-        latent /= (torch.linalg.norm(latent, axis=-1, keepdims=True) + 1e-9)
-        reconstructed = self.decode(latent, seq_len)
-        return reconstructed, latent
+        reconstructed_cat, reconstructed_num = self.decode(latent, seq_len)
+        return reconstructed_cat, reconstructed_num, latent
+
+
+
