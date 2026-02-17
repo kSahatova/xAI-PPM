@@ -236,10 +236,11 @@ def prepare_data(
 ):
     if include_labels:
         df = df.loc[
-            :, ["case:concept:name", "concept:name", "time:timestamp", "outcome"]
+            :, ["case:concept:name", "concept:name", "time:timestamp", "case:LoanGoal", "case:ApplicationType", "EventOrigin", "lifecycle:transition", "case:RequestedAmount", "outcome",]
         ]
     else:
-        df = df.loc[:, ["case:concept:name", "concept:name", "time:timestamp"]]
+        df = df.loc[:, ["case:concept:name", "concept:name", "time:timestamp", "case:LoanGoal", "case:ApplicationType", "EventOrigin", "lifecycle:transition", "case:RequestedAmount"]]
+    
     cases_to_drop = df.groupby("case:concept:name").size() > 2
     cases_to_drop = cases_to_drop[cases_to_drop].index
     df = df[df["case:concept:name"].isin(cases_to_drop)]

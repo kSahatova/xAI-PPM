@@ -43,25 +43,40 @@ class InLayer(nn.Module):
         # if pos_encoding_strategy not in ["concat", "sum"]:
         #     raise ValueError(f"Invalid pos_encoding_strategy '{pos_encoding_strategy}'. Must be 'concat' or 'sum'.")
         
-        in_embedding_size = embedding_size // 2 if strategy == "concat" else embedding_size
-        if self.pos_encoding_form is not None:
-            embed_layer_size = (in_embedding_size // 2 if pos_encoding_strategy == "concat" 
-                                else in_embedding_size)
+        if strategy == "concat":
+            if len(numerical_cols) > 0:
+                embed_layer_size = embedding_size - embedding_size // (len(categorical_cols) + 1)
+                in_embedding_size = embed_layer_size // len(categorical_cols)
+                
+            else:
+                in_embedding_size = embedding_size // len(categorical_cols)
+                embed_layer_size = in_embedding_size
+        elif strategy == "sum":
+            in_embedding_size = embedding_size
         else:
-            embed_layer_size = in_embedding_size
+            raise ValueError("Invalid strategy")
 
-        # assert embedding size is divisible by the number of features
-        # assert embedding_size % self.total_features == 0, "Embedding size must be divisible by the number of features"
         self.embedding_layers = nn.ModuleDict()
         for col in categorical_cols:
-            self.embedding_layers[col] = nn.Embedding(
-                categorical_sizes[col],
-                embed_layer_size,
-                padding_idx=padding_idx,
+            self.embedding_layers[col] = nn.Sequential(
+                nn.Embedding(
+                    categorical_sizes[col],
+                    in_embedding_size,
+                    padding_idx=padding_idx,
+                ),
+                nn.LayerNorm(in_embedding_size),
             )
 
+
         if len(numerical_cols) > 0:
-            self.continuous_layer = nn.Linear(len(numerical_cols), in_embedding_size)
+            if strategy == "concat":
+                num_embedding_size = embedding_size - (in_embedding_size * len(categorical_cols))
+            else:
+                num_embedding_size = in_embedding_size
+            
+            self.continuous_layer = nn.Sequential(
+                nn.Linear(len(numerical_cols), num_embedding_size),
+            )
 
         # positional encoding
         if self.pos_encoding_form is not None:
@@ -123,11 +138,23 @@ class InLayer(nn.Module):
         return x
 
     def init_params(self):
-        for _, layer in self.embedding_layers.items():
-            nn.init.xavier_uniform_(layer.weight)
+        for _, sequential_layer in self.embedding_layers.items():
+            for layer in sequential_layer:
+                if isinstance(layer, nn.Embedding):
+                    nn.init.xavier_uniform_(layer.weight)
+                elif isinstance(layer, nn.Linear):
+                    nn.init.xavier_uniform_(layer.weight)
+                    if layer.bias is not None:
+                        nn.init.zeros_(layer.bias)
 
         if len(self.numerical_cols) > 0:
-            nn.init.xavier_uniform_(self.continuous_layer.weight)
+            for layer in self.continuous_layer:
+                if isinstance(layer, nn.Embedding):
+                    nn.init.xavier_uniform_(layer.weight)
+                elif isinstance(layer, nn.Linear):
+                    nn.init.xavier_uniform_(layer.weight)
+                    if layer.bias is not None:
+                        nn.init.zeros_(layer.bias)
 
 
 class OutLayer(nn.Module):

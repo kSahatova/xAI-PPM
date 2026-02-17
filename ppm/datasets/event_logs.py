@@ -126,7 +126,7 @@ class EventLog:
     def _encode_categorical_features(self):
         # UPDATED: self.features.categorical + self.targets.categorical -> self.features.categorical 
         for cat in set(self.features.categorical):
-            self.dataframe.loc[:, cat] = self.dataframe.loc[:, cat].map(
+            self.dataframe[cat] = self.dataframe.loc[:, cat].map(
                 self.stoi[cat.replace("next_", "")], na_action="ignore"
             )  # replace operation ensures that the next_activity is encoded using the same stoi as activity
             self.dataframe[cat] = self.dataframe[cat].infer_objects()
