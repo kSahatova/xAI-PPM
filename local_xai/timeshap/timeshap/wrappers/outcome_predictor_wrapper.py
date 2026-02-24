@@ -14,12 +14,10 @@ class OutcomePredictorWrapper(TimeSHAPWrapper):
         model: nn.Module,
         batch_budget: int,
         categorical_indices: List[int],
-        target: str,
         device: torch.device,
     ):
         super(OutcomePredictorWrapper, self).__init__(model, batch_budget)
         self.categorical_indices = categorical_indices
-        self.target = target
         self.device = device
 
     def prepare_input(self, input):

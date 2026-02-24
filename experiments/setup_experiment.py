@@ -1,16 +1,22 @@
 import torch
-import numpy as np
 import pandas as pd
 
-from typing import List
 from torch.utils.data import DataLoader
 
+from skpm import event_logs
+from ppm.datasets import DatasetSchemas
 from ppm.datasets import ContinuousTraces
 from ppm.datasets.event_logs import EventFeatures, EventLog, EventTargets
 from ppm.datasets.utils import continuous
 from ppm import models as ppm_models
 from ppm.engine.utils import load_checkpoint
-from ppm.utils import prepare_data, prepare_simbank_data, get_model_config
+from ppm.utils import (
+    prepare_data,
+    prepare_simbank_data,
+    get_model_config,
+    parse_args,
+    add_outcome_labels,
+)
 
 
 RANDOM_SEED = 42
@@ -31,7 +37,7 @@ NUMERICAL_FEATURES = [
 
 
 def setup_dataloaders(config: dict, log: pd.DataFrame, unbiased_split_params):
-    if config["log"] == "BPI17":
+    if config["dataset"] == "BPI17":
         result = prepare_data(
             log,
             unbiased_split_params,
@@ -45,7 +51,7 @@ def setup_dataloaders(config: dict, log: pd.DataFrame, unbiased_split_params):
             train, test = result
         else:
             raise ValueError("Unexpected return value from prepare_data()")
-    elif config["log"] == "synthetic":
+    elif config["dataset"] == "synthetic":
         train, test = prepare_simbank_data(log, NUMERICAL_FEATURES)
     else:
         raise ValueError(
@@ -67,7 +73,7 @@ def setup_dataloaders(config: dict, log: pd.DataFrame, unbiased_split_params):
         features=event_features,
         targets=event_targets,
         train_split=True,
-        name=config["log"],
+        name=config["dataset"],
     )
 
     test_log = EventLog(
@@ -76,7 +82,7 @@ def setup_dataloaders(config: dict, log: pd.DataFrame, unbiased_split_params):
         features=event_features,
         targets=event_targets,
         train_split=False,
-        name=config["log"],
+        name=config["dataset"],
         vocabs=train_log.get_vocabs(),
     )
 
@@ -114,7 +120,12 @@ def setup_dataloaders(config: dict, log: pd.DataFrame, unbiased_split_params):
     return train_loader, test_loader
 
 
-def setup_model(config: dict, log: EventLog, model_name: str = "outcome_predictor"):
+def setup_model(
+    config: dict,
+    log: EventLog,
+    checkpoint_path: str,
+    model_name: str = "outcome_predictor",
+):
     # Loading a pre-trained model
     model_config = get_model_config(log, config)
     if model_name == "outcome_predictor":
@@ -125,7 +136,7 @@ def setup_model(config: dict, log: EventLog, model_name: str = "outcome_predicto
     model_class = getattr(ppm_models, model_class_name)
     model = model_class(**model_config).to(device=config["device"])
 
-    ckpt = load_checkpoint(config["checkpoint_path"], map_location=config["device"])
+    ckpt = load_checkpoint(checkpoint_path, map_location=config["device"])
     if isinstance(ckpt, dict) and "net" in ckpt.keys():
         ckpt = ckpt["net"]
     model.load_state_dict(ckpt)
@@ -133,14 +144,41 @@ def setup_model(config: dict, log: EventLog, model_name: str = "outcome_predicto
     return model
 
 
-def extract_one_offer_cases(trace_set, o_created_ind=15):
-    """Extracts case ids with one and multiple offers"""
-    one_offer_ids = []
-    multiple_offers_ids = {}
-    for i, trace in enumerate(trace_set):
-        offered_times = np.where(trace == o_created_ind)[0].size 
-        if offered_times == 1:
-            one_offer_ids.append(i)
-        else:
-            multiple_offers_ids[i] = offered_times
-    return one_offer_ids, multiple_offers_ids
+def load_data_and_model(config_path: str, checkpoint_path: str):
+    """Load event log, prepare binary-labelled dataframe, build data loaders
+    and load the pre-trained model.
+
+    Returns
+    -------
+    config : dict
+    train_loader, test_loader : DataLoader
+    model : nn.Module  (already in eval mode)
+    """
+    torch.manual_seed(RANDOM_SEED)
+    LABELS_DICT = {"O_Accepted": 0, "O_Cancelled": 1, "O_Refused": 2}
+
+    args = parse_args(config_path=config_path)
+    config = vars(args)
+    config["continuous_features"] = (
+        NUMERICAL_FEATURES
+        if config["continuous_features"] == "all"
+        else config["continuous_features"]
+    )
+
+    log = getattr(event_logs, config["dataset"])()
+    column_schema = getattr(DatasetSchemas, config["dataset"])()
+    labeled_df = add_outcome_labels(log.dataframe, column_schema, LABELS_DICT)
+    binary_labeled_df = labeled_df[labeled_df["outcome"] != 2]  # drop O_Refused
+
+    train_loader, test_loader = setup_dataloaders(
+        config, binary_labeled_df, log.unbiased_split_params
+    )
+    model = setup_model(
+        config,
+        train_loader.dataset.log,
+        checkpoint_path,
+        model_name="outcome_predictor",
+    )
+    model.eval()
+
+    return config, train_loader, test_loader, model

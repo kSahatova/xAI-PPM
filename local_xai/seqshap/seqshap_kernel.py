@@ -157,7 +157,6 @@ class SeqShapKernel(KernelExplainer):
         
         # calculates model output over the given background dataset (model_null [self.data.shape[0] x n_outputs])
         model_null, returns_hs = match_seq_model_to_data(self.model, self.data)
-        # TODO: revise how the hidden state can be used for SHAP values calculation
         self.returns_hs = returns_hs 
 
         if self.returns_hs:
@@ -171,7 +170,7 @@ class SeqShapKernel(KernelExplainer):
             self.background_hs = tuple(
                 np.zeros_like(example_hs[i])
                 for i, x in enumerate(example_hs)
-            )    
+            )
 
         # warn users about large background data sets
         if len(self.data.weights) > 100:
@@ -193,7 +192,7 @@ class SeqShapKernel(KernelExplainer):
         self.nsamplesAdded = 0
         self.nsamplesRun = 0
 
-        # find the expected model output (9weighted average) over the background (null) dataset E_x[f(x)] 
+        # find the expected model output (weighted average) over the background (null) dataset E_x[f(x)] 
         self.fnull = np.sum((model_null.T * self.data.weights).T, 0)
         self.expected_value = self.linkfv(self.fnull)
 
@@ -764,11 +763,11 @@ class SeqShapKernel(KernelExplainer):
         
         
         for (start, end) in varying_segments:
-            evaluation_data = x[0:1, start:end, :]
+            evaluation_data = x[0:1, start:end+1, :]
             if self.returns_hs:
-                self.synth_data[offset : offset + self.N, start:end, :] = evaluation_data
+                self.synth_data[offset : offset + self.N, start:end+1, :] = evaluation_data
             else:
-                self.synth_data[offset : offset + self.N, start:end, :] = (
+                self.synth_data[offset : offset + self.N, start:end+1, :] = (
                     evaluation_data
                 )
 

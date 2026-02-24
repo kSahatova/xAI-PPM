@@ -141,7 +141,7 @@ class Explainer:
                 sep_loss_result = self.cluster_regularization(latent) * self.sep_coef
                 mse_loss_result = mse_loss(reconstructed, input)
                 bce_loss_result = bce_loss(y_pred_clamped, out_recon_clamped)
-                loss = sep_loss_result + mse_loss_result + 0.01*bce_loss_result
+                loss = sep_loss_result + mse_loss_result + bce_loss_result
                 loss.backward()
                 # clip_grad_norm_(self.explainer.parameters(), max_norm=1.0)
                 

@@ -5,8 +5,8 @@ from torch import nn
 from torch_geometric.data import Data, Batch
 from tqdm import tqdm
 import random
-from utils.unsup_anomaly_detection.gama.gat_ae import GAT_AE
-from utils.unsup_anomaly_detection.gama.graph_generator import graph_generator
+from xai_utils.unsup_anomaly_detection.gama.gat_ae import GAT_AE
+from xai_utils.unsup_anomaly_detection.gama.graph_generator import graph_generator
 
 
 class GAMA:

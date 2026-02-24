@@ -1,0 +1,198 @@
+from regex import E
+import torch
+from torch import nn
+from torch.nn import functional as F
+
+from .positional_encoding import (
+    SinusoidalPositionEncoder, LearnablePositionEncoder,
+    RandomPositionalEncoder, DummyPositionEncoder
+)
+
+
+class InLayer(nn.Module):
+    def __init__(
+        self,
+        categorical_cols: list[str],
+        categorical_sizes: dict[str, int],
+        numerical_cols: list[str] = [],
+        embedding_size: int = 768,
+        strategy: str = "concat",
+        pos_encoding_form: str = "sinusoidal",
+        pos_encoding_strategy: str = "sum",
+        padding_idx: int = 0,
+    ):
+        assert len(categorical_cols) == len(categorical_sizes)
+
+        super(InLayer, self).__init__()
+
+        self.embedding_size = embedding_size
+        self.categorical_cols = categorical_cols
+        self.categorical_sizes = categorical_sizes
+        self.numerical_cols = numerical_cols
+        self.padding_idx = padding_idx
+        self.strategy = strategy
+        self.pos_encoding_form = pos_encoding_form
+        self.pos_encoding_strategy = pos_encoding_strategy
+
+        self.total_features = len(categorical_cols) + len(numerical_cols)
+
+        in_embedding_size = embed_layer_size = 0
+        if strategy not in ["concat", "sum"]:
+            raise ValueError(f"Invalid strategy '{strategy}'. Must be 'concat' or 'sum'.")
+
+        # if pos_encoding_strategy not in ["concat", "sum"]:
+        #     raise ValueError(f"Invalid pos_encoding_strategy '{pos_encoding_strategy}'. Must be 'concat' or 'sum'.")
+        
+        if strategy == "concat":
+            if len(numerical_cols) > 0:
+                embed_layer_size = embedding_size - embedding_size // (len(categorical_cols) + 1)
+                in_embedding_size = embed_layer_size // len(categorical_cols)
+                
+            else:
+                in_embedding_size = embedding_size // len(categorical_cols)
+                embed_layer_size = in_embedding_size
+        elif strategy == "sum":
+            in_embedding_size = embedding_size
+        else:
+            raise ValueError("Invalid strategy")
+
+        self.embedding_layers = nn.ModuleDict()
+        for col in categorical_cols:
+            self.embedding_layers[col] = nn.Sequential(
+                nn.Embedding(
+                    categorical_sizes[col],
+                    in_embedding_size,
+                    padding_idx=padding_idx,
+                ),
+                nn.LayerNorm(in_embedding_size),
+            )
+
+
+        if len(numerical_cols) > 0:
+            if strategy == "concat":
+                num_embedding_size = embedding_size - (in_embedding_size * len(categorical_cols))
+            else:
+                num_embedding_size = in_embedding_size
+            
+            self.continuous_layer = nn.Sequential(
+                nn.Linear(len(numerical_cols), num_embedding_size),
+            )
+
+        # positional encoding
+        if self.pos_encoding_form is not None:
+            if pos_encoding_form == "sinusoidal":
+                self.position_encoder = SinusoidalPositionEncoder(embed_layer_size)
+            # TODO : adjust learnable and random encodings properly (max_length)
+            elif pos_encoding_form == "learnable":
+                self.position_encoder = LearnablePositionEncoder(embed_layer_size, max_length=2048)
+            elif pos_encoding_form == "random":
+                self.position_encoder = RandomPositionalEncoder(embed_layer_size, max_length=2048)
+            elif pos_encoding_form == "dummy":
+                self.position_encoder = DummyPositionEncoder()
+            else:
+                raise ValueError(f"Invalid pos_encoding_form '{pos_encoding_form}'. Must be 'sinusoidal', 'learnable', 'random' or 'dummy'.")
+
+        self.layer_norm = nn.LayerNorm(embedding_size)
+        self.init_params()
+
+    def forward(self, cat_x, num_x=None):
+
+        # cat features
+        embedded_features = []
+        for ix, name in enumerate(self.categorical_cols):
+            # since we use OrderedDict, we can access the embedding layer by index
+            embedded = self.embedding_layers[name](cat_x[..., ix])
+
+            # add positional encoding
+            if self.pos_encoding_form is not None:
+                pos_encoded = self.position_encoder(embedded)
+                encoded_features = None
+                
+                if self.pos_encoding_strategy == "concat":
+                    batch_size = embedded.size(0)
+                    encoded_features = torch.cat([embedded, pos_encoded.expand(batch_size, -1, -1)], dim=-1)
+                elif self.pos_encoding_strategy == "sum":
+                    encoded_features = embedded + pos_encoded
+            else:
+                encoded_features = embedded
+            embedded_features.append(encoded_features)
+            
+        # num features
+        if len(self.numerical_cols) > 0:
+            projected_features = self.continuous_layer(num_x)
+
+        # concatenate or sum
+        if self.strategy == "concat":
+            x = torch.cat(embedded_features, dim=-1)
+            if len(self.numerical_cols) > 0:
+                x = torch.cat(
+                    [x, projected_features],
+                    dim=-1,
+                )
+        elif self.strategy == "sum":
+            x = sum(embedded_features)
+            if len(self.numerical_cols) > 0:
+                x += projected_features
+
+        x = self.layer_norm(x)
+        return x
+
+    def init_params(self):
+        for _, sequential_layer in self.embedding_layers.items():
+            for layer in sequential_layer:
+                if isinstance(layer, nn.Embedding):
+                    nn.init.xavier_uniform_(layer.weight)
+                elif isinstance(layer, nn.Linear):
+                    nn.init.xavier_uniform_(layer.weight)
+                    if layer.bias is not None:
+                        nn.init.zeros_(layer.bias)
+
+        if len(self.numerical_cols) > 0:
+            for layer in self.continuous_layer:
+                if isinstance(layer, nn.Embedding):
+                    nn.init.xavier_uniform_(layer.weight)
+                elif isinstance(layer, nn.Linear):
+                    nn.init.xavier_uniform_(layer.weight)
+                    if layer.bias is not None:
+                        nn.init.zeros_(layer.bias)
+
+
+class OutLayer(nn.Module):
+    def __init__(self, input_size, output_size):
+        super(OutLayer, self).__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        self.layer_norm = nn.LayerNorm(input_size)
+        self.linear = nn.Linear(input_size, output_size)
+        self.init_params()
+
+    def init_params(self):
+        nn.init.xavier_uniform_(self.linear.weight)
+        nn.init.zeros_(self.linear.bias)
+
+    def forward(self, x):
+        x = self.layer_norm(x)
+        return self.linear(x)
+
+
+class CRTPDecoder(nn.Module):
+    def __init__(self, input_size, output_size):
+        super(CRTPDecoder, self).__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        # self.lstm = nn.LSTM(
+        #     input_size=input_size,
+        #     hidden_size=input_size,
+        #     num_layers=1,
+        #     batch_first=True,
+        #     bidirectional=True,
+        # )
+        # self.batch_norm = nn.BatchNorm1d(input_size * 2)
+        self.layer_norm = nn.LayerNorm(input_size)
+        self.linear = nn.Linear(input_size, output_size)
+
+    def forward(self, x):
+        # x, _ = self.lstm(x)
+        # x = self.batch_norm(x.transpose(1, 2)).transpose(1, 2)
+        x = self.layer_norm(x)
+        return self.linear(x)
