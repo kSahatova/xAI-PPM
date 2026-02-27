@@ -38,7 +38,7 @@ def plot_segmented_trace_vertical(
     # Create segment membership mapping
     segment_membership = {}
     for (start, end), color in seg_boundaries_colors.items():
-        for i in range(start, end + 1):
+        for i in range(start, end + 1):  
             if i < trace_length:
                 segment_membership[i] = color
 

@@ -229,6 +229,7 @@ def train_engine(
                     "itos": train_loader.dataset.log.itos,
                 }
                 save_checkpoint(
+                    checkpoint_dir=config["checkpoint_dir"],
                     checkpoint=cpkt,
                     experiment_id="{}_{}_{}_{}".format(config["log"], config["backbone"], 
                                                        config["categorical_targets"][0], config["log"].lower()),

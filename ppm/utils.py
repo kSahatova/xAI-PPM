@@ -7,10 +7,12 @@ import numpy as np
 
 import torch
 from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
 
 from imblearn.under_sampling import RandomUnderSampler
 
 from skpm.event_logs.split import unbiased
+from ppm.build.lib.metrics import tracker
 from ppm.datasets.event_logs import EventLog
 from ppm.datasets import DatasetColumnSchema
 
@@ -18,6 +20,7 @@ from ppm.models.config import FreezingConfig
 from sklearn.preprocessing import StandardScaler
 
 from skpm.feature_extraction import TimestampExtractor
+import matplotlib.pyplot as plt
 
 
 def ensure_dir(path):
@@ -141,6 +144,7 @@ def parse_args(config_path: str = ""):
     parser.add_argument(
         "--rnn_type", type=str, default="lstm", choices=["lstm", "gru", "rnn"]
     )
+    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints/")
 
     """if fine-tuning """
     parser.add_argument(
@@ -238,11 +242,34 @@ def prepare_data(
 ):
     if include_labels:
         df = df.loc[
-            :, ["case:concept:name", "concept:name", "time:timestamp", "case:LoanGoal", "case:ApplicationType", "EventOrigin", "lifecycle:transition", "case:RequestedAmount", "outcome",]
+            :,
+            [
+                "case:concept:name",
+                "concept:name",
+                "time:timestamp",
+                "case:LoanGoal",
+                "case:ApplicationType",
+                "EventOrigin",
+                "lifecycle:transition",
+                "case:RequestedAmount",
+                "outcome",
+            ],
         ]
     else:
-        df = df.loc[:, ["case:concept:name", "concept:name", "time:timestamp", "case:LoanGoal", "case:ApplicationType", "EventOrigin", "lifecycle:transition", "case:RequestedAmount"]]
-    
+        df = df.loc[
+            :,
+            [
+                "case:concept:name",
+                "concept:name",
+                "time:timestamp",
+                "case:LoanGoal",
+                "case:ApplicationType",
+                "EventOrigin",
+                "lifecycle:transition",
+                "case:RequestedAmount",
+            ],
+        ]
+
     cases_to_drop = df.groupby("case:concept:name").size() > 2
     cases_to_drop = cases_to_drop[cases_to_drop].index
     df = df[df["case:concept:name"].isin(cases_to_drop)]
@@ -287,7 +314,7 @@ def prepare_data(
 def prepare_simbank_data(
     df: pd.DataFrame,
     numerical_features: List[str],
-    unbiased_split_params: dict = {'test_ratio': 0.2},
+    unbiased_split_params: dict = {"test_ratio": 0.2},
 ):
     # Extract last activity of each case for the outcome feature generation
     last_activities = (
@@ -332,7 +359,7 @@ def prepare_simbank_data(
 
     # Splitting into train and test
     ### TEST SET ###
-    test_ratio = unbiased_split_params['test_ratio']
+    test_ratio = unbiased_split_params["test_ratio"]
     first_test_case_nr = int(len(grouped) * (1 - test_ratio))
     first_test_start_time = grouped["min"].sort_values().values[first_test_case_nr]
     # retain cases that end after first_test_start time
@@ -441,11 +468,11 @@ def get_model_config(
     }
 
 
-def calculate_accuracy(model: torch.nn.Module, data_loader: DataLoader, device: str, task='outcome_prediction'):
+def calculate_accuracy(model: torch.nn.Module, data_loader: DataLoader, device: str):
     """
     Calculates accuracy of the provided model on the given data loader
     """
- 
+
     model.eval()
     total_targets = 0
     accuracy = 0
@@ -466,15 +493,16 @@ def calculate_accuracy(model: torch.nn.Module, data_loader: DataLoader, device: 
             # with torch.autocast(device_type=device, dtype=torch.float16):
             out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
 
-            mask = attention_mask.bool().view(-1)
-            for ix, target in enumerate(data_loader.dataset.log.targets.categorical):
-                predictions = torch.argmax(out[target], dim=-1)
-                accuracy += (
-                    (predictions.view(-1)[mask] == y_cat[..., ix].view(-1)[mask])
-                    .sum()
-                    .item()
+            predictions = ((out.squeeze(-1)) > 0.5).float()
+            acc = (
+                (
+                    predictions.squeeze(-1)[attention_mask.bool()]
+                    == y_cat.squeeze(-1)[attention_mask.bool()]
                 )
-                # accuracy += acc
+                .sum()
+                .item()
+            )
+            accuracy += acc
 
     print("Accuracy of the model: {:.3%}".format(accuracy / total_targets))
 
@@ -546,7 +574,7 @@ def extract_explicands_samples(model, dataloader, prefix_len=15, explicands_num=
         pred_cases_info[sample_name]["cases"].append(case)
         pred_cases_info[sample_name]["y_pred"].append(out.squeeze(1)[0, -1].item())
         pred_cases_info[sample_name]["y_true"].append(y_true)
-    
+
     print(
         "TP case number ('O_Cancelled' correctly pred):",
         len(pred_cases_info["tp"]["cases"]),
@@ -580,3 +608,92 @@ def extract_explicands_samples(model, dataloader, prefix_len=15, explicands_num=
         }
 
     return explicands_w_one_offer
+
+
+def calculate_accuracy_per_position(
+    model, data_loader, device: str = "cuda", save_path: str = None, show: bool = True
+):
+    """Compute and plot accuracy per prefix position.
+
+    Returns a dict with `positions`, `accuracies` and `valid_counts` so callers
+    can programmatically inspect results. If `save_path` is provided the plot
+    will be saved to that path.
+    """
+
+    model.eval()
+
+    metrics = {}
+    valid_positions = {}
+
+    with torch.inference_mode():
+        for items in data_loader:
+            x_cat, x_num, y_cat, y_num = items
+            x_cat, x_num, y_cat, y_num = (
+                x_cat.to(device),
+                x_num.to(device),
+                y_cat.to(device),
+                y_num.to(device),
+            )
+
+            attention_mask = (x_cat[..., 0] != 0).long()
+
+            out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
+            predictions = ((out.squeeze(-1)) > 0.5).float()
+
+            max_len = attention_mask.size(1)
+            idxs = torch.arange(max_len).unsqueeze(0).to(device)  # [1, S]
+            lengths = attention_mask.sum(dim=-1)  # [B]
+            mask = idxs < lengths.unsqueeze(1)  # [B, S]
+
+            correct = (predictions.squeeze() == y_cat.squeeze()) & mask
+            for t in range(max_len):
+                valid = mask[:, t]
+                if valid.any():
+                    acc_t = correct[:, t][valid].float().sum()
+                else:
+                    acc_t = torch.tensor(float("nan"))
+                metrics.setdefault(f"acc_pos_{t}", 0.0)
+                metrics[f"acc_pos_{t}"] += acc_t.item()
+                valid_positions.setdefault(f"acc_pos_{t}", 0)
+                valid_positions[f"acc_pos_{t}"] += int(valid.sum().item())
+
+    # Build ordered lists of positions and compute accuracies (as proportions)
+    pos_indices = sorted([int(k.split("_")[-1]) for k in valid_positions.keys()])
+    positions = [p + 1 for p in pos_indices]  # convert to 1-based for plotting
+    accuracies = []
+    valid_counts = []
+    for p in pos_indices:
+        key = f"acc_pos_{p}"
+        count = valid_positions.get(key, 0)
+        valid_counts.append(count)
+        if count > 0:
+            acc = metrics.get(key, 0.0) / count
+        else:
+            acc = float("nan")
+        accuracies.append(acc)
+
+    # Plot
+    plt.figure(figsize=(10, 4))
+    plt.plot(positions, accuracies, marker="o", linestyle="-", color="C0")
+    plt.xlabel("Position (prefix length)")
+    plt.ylabel("Accuracy")
+    plt.title("Model accuracy per prefix position")
+    plt.ylim(0.0, 1.0)
+    plt.grid(True, linestyle="--", alpha=0.5)
+
+    # Annotate with counts (optional small text)
+    for x, y, c in zip(positions, accuracies, valid_counts):
+        plt.text(x, max(0.0, y - 0.04), f"n={c}", ha="center", fontsize=8)
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches="tight")
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+    return {
+        "positions": positions,
+        "accuracies": accuracies,
+        "valid_counts": valid_counts,
+    }

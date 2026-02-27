@@ -12,3 +12,4 @@ preprocessing
 lempel_ziv_segmentation.ipynb
 trace_segmentation_test.ipynb
 xai_utils/trace_segmentation/information_gain_based.py
+local_xai/utils/trace_segmentation/utils.py

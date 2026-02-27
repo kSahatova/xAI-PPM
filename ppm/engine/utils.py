@@ -2,16 +2,19 @@ import os
 import torch
 
 from pathlib import Path
-from typing import Union
+from typing import Union, Optional
 
-def save_checkpoint(checkpoint: dict, experiment_id: Union[str, int]) -> Path:
+def save_checkpoint(checkpoint: dict, experiment_id: Union[str, int], checkpoint_dir: Optional[str]) -> Path:
     """
     Save the checkpoint dict as a .pth file under models/suffix/<experiment_id>.pth.
     If VSC_DATA is set, it’s used as the base folder; otherwise the current dir is used.
     """
-    base_dir = Path(os.getenv("VSC_SCRATCH", "."))
-    save_path = base_dir / "persisted_models" / "suffix" / f"{experiment_id}.pth"
-    save_path.parent.mkdir(parents=True, exist_ok=True)
+    if checkpoint_dir is None:
+        base_dir = Path(os.getenv("VSC_SCRATCH", "."))
+        save_path = base_dir / "persisted_models" / "suffix" / f"{experiment_id}.pth"
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        save_path = Path(checkpoint_dir, f"{experiment_id}.pth")
     try:
         torch.save(checkpoint, save_path)
     except Exception as e:

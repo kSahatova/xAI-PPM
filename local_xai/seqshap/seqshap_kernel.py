@@ -148,8 +148,8 @@ class SeqShapKernel(KernelExplainer):
         kwargs = {}
         if self.mode == "segment":
             self.segment_boundaries = {i: (seg[0], seg[-1]) for i, seg in enumerate(self.segment_ids)}
-            kwargs["segments_ind"] = list(self.segment_boundaries.keys()) 
-        # Baseline sequence should be transformed to the DenseData class 
+            kwargs["segments_ind"] = list(self.segment_boundaries.keys())
+        # Baseline sequence should be transformed to the DenseData class
         try:
             self.data = convert_to_data(bc_sequence, self.mode, **kwargs)
         except Exception as e:
@@ -519,10 +519,10 @@ class SeqShapKernel(KernelExplainer):
         
         for subseq_idx, (start, end) in self.segment_boundaries.items():
             # Extract subsequence from instance
-            x_subseq = x[0, start:end, :]  # Shape: (subseq_length, n_features)
+            x_subseq = x[0, start:end + 1, :]  # Shape: (subseq_length, n_features)
             
             # Extract corresponding subsequence from background
-            bg_subseq = self.data.data[:, start:end, :]  # Shape: (n_bg_samples, subseq_length, n_features)
+            bg_subseq = self.data.data[:, start:end + 1, :]  # Shape: (n_bg_samples, subseq_length, n_features)
             
             # Check if this subsequence varies
             varies = self._check_subsequence_variation(x_subseq, bg_subseq)

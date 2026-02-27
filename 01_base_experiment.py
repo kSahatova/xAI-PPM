@@ -29,7 +29,7 @@ import os.path as osp
 from typing import Dict
 
 from experiments.setup_experiment import load_data_and_model
-from ppm.utils import extract_explicands_samples
+from ppm.utils import calculate_accuracy, extract_explicands_samples, calculate_accuracy_per_position
 from local_xai.utils.baseline_calculation import build_average_event_baseline
 from local_xai.utils.trace_segmentation.transition_based import build_transition_matrix
 from local_xai.utils.trace_segmentation.transition_based import (
@@ -52,7 +52,7 @@ EXPLICANDS_NUM = 10
 PROJECT_DIR = r"D:\PycharmProjects\xAI-PPM"
 OUTPUT_ROOT = osp.join(PROJECT_DIR, r"outputs")
 config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op.txt")
-checkpoint_path = osp.join(PROJECT_DIR, r"persisted_models\suffix\BPI17_rnn_outcome_bpi17.pth")
+checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\BPI17_rnn_outcome_bpi17.pth")
 
 
 def compute_segment_shap_values(
@@ -101,7 +101,7 @@ def compute_segment_shap_values(
 
             if save_plots:
                 plot_segment_level_sv(
-                    seg_sv, seg_explainer, seg_names, name, i, output_dir
+                    seg_sv, seg_explainer, seg_names, i, output_dir
                 )
 
             # --- feature-level ---
@@ -110,7 +110,7 @@ def compute_segment_shap_values(
 
             if save_plots:
                 plot_feature_level_sv(
-                    feat_sv, feat_explainer, config, name, i, output_dir
+                    feat_sv, feat_explainer, config, i, output_dir
                 )
 
             case_results.append(
@@ -137,7 +137,8 @@ def main():
     config, train_loader, test_loader, model = load_data_and_model(
         config_path, checkpoint_path
     )
-    # evaluate_model(model, test_loader, device=config["device"])
+    # calculate_accuracy(model, test_loader, device=config["device"])
+    calculate_accuracy_per_position(model, test_loader, device=config["device"])
 
     # ── 2. Extract & filter cases ───────────────────────────────────
     print("\nExtracting prediction cases …")
@@ -195,7 +196,7 @@ def main():
         output_dir=sv_output_dir,
         save_plots=True,
     )
-
+    
     # ── 6. Persist results for ablation / correlation scripts ──────
     print("\nSaving raw results …")
     results_path = osp.join(sv_output_dir, "segment_sv_results.pkl")

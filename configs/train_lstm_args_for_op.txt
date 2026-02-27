@@ -12,5 +12,6 @@
 --batch_size=64 
 --weight_decay=0.1
 --grad_clip=5.0
---epochs=10
+--epochs=25
 --strategy=concat
+--checkpoint_dir=D:/PycharmProjects/xAI-PPM/outputs/checkpoints

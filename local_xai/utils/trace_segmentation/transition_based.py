@@ -5,7 +5,7 @@ import ruptures as rpt
 from ruptures.base import BaseCost
 import seaborn as sns
 import matplotlib.pyplot as plt
-from local_xai.utils.trace_segmentation.visualization import plot_segmented_trace_vertical
+from .visualization import plot_segmented_trace_vertical
 
 
 def build_transition_matrix(

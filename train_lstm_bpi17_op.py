@@ -77,7 +77,7 @@ EVENT_LOGS = {"BPI17": BPI17}
 def main(training_config: dict):
     log = EVENT_LOGS[training_config["log"]]()
 
-    labels_dict = {"O_Cancelled": 0, "O_Accepted": 1, "O_Refused": 2}
+    labels_dict = {"O_Accepted": 0, "O_Cancelled": 1, "O_Refused": 2}
     column_schema = getattr(DatasetSchemas, training_config["log"])()
     labeled_df = add_outcome_labels(log.dataframe, column_schema, labels_dict)
 
@@ -274,6 +274,7 @@ if __name__ == "__main__":
         "strategy": args.strategy,
         "pos_encoding_form": args.pos_encoding_form,
         "pos_encoding_strategy": args.pos_encoding_strategy,
+        'checkpoint_dir': args.checkpoint_dir
     }
 
 

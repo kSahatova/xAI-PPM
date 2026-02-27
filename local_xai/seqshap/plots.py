@@ -39,25 +39,25 @@ def plot_segment_shap_heatmap(segment_names, segment_level_sv, save_path=None):
     return fig
 
 
-def plot_segment_level_sv(seg_sv, seg_explainer, seg_names, name, i, output_dir):
+def plot_segment_level_sv(seg_sv, seg_explainer, seg_names, i, output_dir):
     expl = Explanation(
         seg_sv, base_values=seg_explainer.expected_value,
         feature_names=seg_names,
     )
     fig = shap.plots.force(expl, matplotlib=True, contribution_threshold=0, show=False)
     fig.savefig(
-        osp.join(output_dir, name, f"{name}_case_{i}_seg_sv_force.png"),
+        osp.join(output_dir, f"case_{i}_seg_sv_force.png"),
         dpi=300, facecolor="white", bbox_inches="tight",
     )
     hm = plot_segment_shap_heatmap(seg_names, seg_sv)
     hm.savefig(
-        osp.join(output_dir, name, f"{name}_case_{i}_seg_sv_heatmap.png"),
+        osp.join(output_dir, f"case_{i}_seg_sv_heatmap.png"),
         dpi=300, facecolor="white", bbox_inches="tight",
     )
     plt.close("all")
 
 
-def plot_feature_level_sv(feat_sv, feat_explainer, config, name, i, output_dir):
+def plot_feature_level_sv(feat_sv, feat_explainer, config, i, output_dir):
     expl = Explanation(
         feat_sv, base_values=feat_explainer.expected_value,
         feature_names=config["categorical_features"] + config["continuous_features"],
@@ -66,7 +66,7 @@ def plot_feature_level_sv(feat_sv, feat_explainer, config, name, i, output_dir):
     shap.plots.bar(expl, show=False)
     plt.tight_layout()
     plt.savefig(
-        osp.join(output_dir, name, f"{name}_case_{i}_feat_sv_bar.png"),
+        osp.join(output_dir, f"case_{i}_feat_sv_bar.png"),
         dpi=300, facecolor="white",
     )
     plt.close("all")
