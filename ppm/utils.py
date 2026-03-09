@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 from imblearn.under_sampling import RandomUnderSampler
 
-from skpm.event_logs.split import unbiased
+from skpm.event_logs.split import temporal, unbiased
 from ppm.build.lib.metrics import tracker
 from ppm.datasets.event_logs import EventLog
 from ppm.datasets import DatasetColumnSchema
@@ -276,6 +276,73 @@ def prepare_data(
 
     df = df.sort_values(by=["case:concept:name", "time:timestamp"])
     train, test = unbiased(df, **unbiased_split_params)
+
+    time_unit = "d"
+    ts = TimestampExtractor(
+        case_features=["accumulated_time", "remaining_time"],
+        event_features="all",
+        time_unit=time_unit,
+    )
+    train[ts.get_feature_names_out()] = ts.fit_transform(train)
+    test[ts.get_feature_names_out()] = ts.transform(test)
+
+    train_timestamps = train.loc[:, "time:timestamp"]
+    test_timestamps = test.loc[:, "time:timestamp"]
+
+    train = train.drop(columns=["time:timestamp"])
+    test = test.drop(columns=["time:timestamp"])
+
+    train = train.rename(
+        columns={"case:concept:name": "case_id", "concept:name": "activity"}
+    )
+    test = test.rename(
+        columns={"case:concept:name": "case_id", "concept:name": "activity"}
+    )
+
+    sc = StandardScaler()
+    columns = numerical_features + ["remaining_time"]
+    # columns = ["accumulated_time", "remaining_time"]
+    train.loc[:, columns] = sc.fit_transform(train[columns])
+    test.loc[:, columns] = sc.transform(test[columns])
+
+    if return_timestamps:
+        return train, test, train_timestamps, test_timestamps
+
+    return train, test
+
+def prepare_sepsis_data(
+    df: pd.DataFrame,
+    # unbiased_split_params: dict,
+    numerical_features: List[str],
+    return_timestamps: bool = False,
+    include_labels: bool = False,
+):
+    if include_labels:
+        df = df.loc[
+            :,
+            [
+                "case:concept:name",
+                "concept:name",
+                "time:timestamp",
+                "outcome",
+            ],
+        ]
+    else:
+        df = df.loc[
+            :,
+            [
+                "case:concept:name",
+                "concept:name",
+                "time:timestamp",
+            ],
+        ]
+
+    cases_to_drop = df.groupby("case:concept:name").size() > 2
+    cases_to_drop = cases_to_drop[cases_to_drop].index
+    df = df[df["case:concept:name"].isin(cases_to_drop)]
+
+    df = df.sort_values(by=["case:concept:name", "time:timestamp"])
+    train, test = temporal(df, test_len=0.3)
 
     time_unit = "d"
     ts = TimestampExtractor(
