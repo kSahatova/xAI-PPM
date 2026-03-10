@@ -240,6 +240,7 @@ def build_summary_table(df: pd.DataFrame, case_summary: pd.DataFrame) -> pd.Data
                          rmcorr.get("rmcorr_note", "n/a")),
             "max_abs_sv": f"{csdf['max_abs_sv'].mean():.4f} ± {csdf['max_abs_sv'].std():.4f}",
             "sum_abs_sv": f"{csdf['sum_abs_sv'].mean():.4f} ± {csdf['sum_abs_sv'].std():.4f}",
+            "mean_abs_sv": f"{csdf['mean_abs_sv'].mean():.4f} ± {csdf['mean_abs_sv'].std():.4f}",
         })
 
     return pd.DataFrame(rows)
@@ -272,7 +273,7 @@ def main():
     print("FRIEDMAN TESTS")
     print("=" * 80)
 
-    for metric in ["max_abs_sv", "sum_abs_sv"]:
+    for metric in ["max_abs_sv", "sum_abs_sv", 'mean_abs_sv']:
         result = run_friedman_test(case_summary, metric)
         sig = "***" if result["friedman_p"] < 0.001 else (
               "**" if result["friedman_p"] < 0.01 else (
@@ -289,8 +290,8 @@ def main():
             for _, row in pw.iterrows():
                 sig_pw = "*" if row["p_bonferroni"] < 0.05 else "ns"
                 print(f"    {row['pair']:30s}  W={row['W']:8.1f}  "
-                      f"p_raw={row['p_raw']:.4f}  "
-                      f"p_bonf={row['p_bonferroni']:.4f} {sig_pw}")
+                      f"p_raw={row['p_raw']:.3f}  "
+                      f"p_bonf={row['p_bonferroni']:.3f} {sig_pw}")
 
             pw_path = osp.join(TABLE_DIR, f"pairwise_wilcoxon_{metric}.csv")
             pw.to_csv(pw_path, index=False)

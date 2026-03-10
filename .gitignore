@@ -2,6 +2,7 @@
 **/__pycache__
 **/.vscode
 **/*.egg-info
+wandb_api.txt
 skpm
 data
 misc
@@ -9,6 +10,8 @@ outputs
 xai_ppm
 persisted_models
 preprocessing
+01_base_experiment.py
+06_segments_label_relation.py
 lempel_ziv_segmentation.ipynb
 trace_segmentation_test.ipynb
 xai_utils/trace_segmentation/information_gain_based.py

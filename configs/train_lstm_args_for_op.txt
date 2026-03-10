@@ -1,7 +1,6 @@
 --dataset=BPI17
 --categorical_targets=outcome
 --project_name=train_lstm_bpic2017
---persist_model
 --device=cpu
 --backbone=rnn
 --rnn_type=lstm
@@ -12,6 +11,6 @@
 --batch_size=64 
 --weight_decay=0.1
 --grad_clip=5.0
---epochs=25
+--epochs=1
 --strategy=concat
 --checkpoint_dir=D:/PycharmProjects/xAI-PPM/outputs/checkpoints

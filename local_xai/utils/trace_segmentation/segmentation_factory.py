@@ -47,7 +47,7 @@ from .transition_based import segment_trace
 SegmentResult = Dict[str, List[List]]
 Segmenter = Callable[[np.ndarray], SegmentResult]
 
-_MODES = ("transition", "random", "per_event", "two_event")
+_MODES = ("transition", "distribution", "random", "per_event", "two_event")
 
 
 # ── Factory ─────────────────────────────────────────────────────────
@@ -63,11 +63,18 @@ def get_segmenter(mode: str, **kwargs) -> Segmenter:
     Parameters
     ----------
     mode : str
-        One of "transition", "random", "per_event", "two_event".
+        One of "transition", "distribution", "random", "per_event", "two_event".
 
     Keyword arguments (mode-dependent):
         transition_matrix : np.ndarray
             Required for "transition" mode.
+        K : int | None
+            Target number of segments for "distribution" mode. If None (default),
+            computed per trace as ``int(min(max(10, n/2), 30))``.
+        m : int
+            Comparison window half-width for "distribution" mode (default 2).
+        sigma : float
+            MMD Gaussian kernel bandwidth for "distribution" mode (default 1.0).
         num_change_points : int | None
             Optional for "random" mode. Fixed number of change points.
         min_change_points : int
@@ -82,6 +89,8 @@ def get_segmenter(mode: str, **kwargs) -> Segmenter:
     """
     if mode == "transition":
         return _make_transition_segmenter(**kwargs)
+    elif mode == "distribution":
+        return _make_distribution_segmenter(**kwargs)
     elif mode == "random":
         return _make_random_segmenter(**kwargs)
     elif mode == "per_event":
@@ -125,6 +134,105 @@ def _make_transition_segmenter(
         return {"segments": segments, "segment_ids": segment_ids}
 
     return _segment
+
+
+# ── Distribution-based ──────────────────────────────────────────────
+
+def _make_distribution_segmenter(
+    K: Optional[int] = None,
+    m: int = 2,
+    sigma: float = 1.0,
+    timestamps: Optional[np.ndarray] = None,
+    min_window_size: int = 3,
+    max_window_size: int = 8,
+    ts_delta_threshold: Optional[float] = None,
+    **_extra,
+) -> Segmenter:
+    """Distribution-based segmentation using MMD as the distance measure.
+
+    Parameters
+    ----------
+    K : int | None
+        Target number of segments. If None (default), computed per trace as
+        ``int(min(max(10, n / 2), 30))`` where n is the trace length.
+    m : int
+        Half-width of the comparison window (how many neighbouring segments
+        are compared when evaluating a split candidate).
+    sigma : float
+        Bandwidth of the Gaussian kernel used in MMD.
+    timestamps : np.ndarray | None
+        Optional datetime array of shape (n,) used for the initial
+        time-aware segmentation step. When provided, ``initial_trace_segmentation``
+        is called to produce ``S_init`` before the distribution-based pass.
+        When None (default), a uniform ``list(range(n))`` is used.
+    min_window_size : int
+        Passed to ``initial_trace_segmentation`` (default 3).
+    max_window_size : int
+        Passed to ``initial_trace_segmentation`` (default 8).
+    ts_delta_threshold : float | None
+        Passed to ``initial_trace_segmentation``. When None, the function
+        derives the threshold automatically from the trace span.
+    """
+    from .distribution_based import (
+        distribution_based_segmentation,
+        calculate_mmd_distance,
+    )
+
+    def _segment(trace: np.ndarray) -> SegmentResult:
+        seq = _to_list(trace)
+        n = len(seq)
+        if n == 0:
+            return {"segments": [], "segment_ids": []}
+
+        k_target = K if K is not None else int(min(max(10, n / 2), 30))
+        k = min(k_target, n - 1)
+        if k < 2:
+            return {"segments": [[float(v) for v in seq]], "segment_ids": [list(range(n))]}
+
+        # ── Initial segmentation ────────────────────────────────────────
+        if timestamps is not None:
+            from .distribution_based import initial_trace_segmentation
+            ts_series = pd.Series(timestamps)
+            initial_segs = initial_trace_segmentation(
+                ts_series,
+                min_window_size=min_window_size,
+                max_window_size=max_window_size,
+                ts_delta_threshold=ts_delta_threshold,
+            )
+            # Flatten the list of sets into an ordered list of index sets for S_init
+            S_init = [sorted(seg) for seg in initial_segs]
+            # Re-derive K from the initial segmentation if not provided
+            if K is None:
+                k_target = int(min(max(10, len(initial_segs) / 2), 30))
+                k = min(k_target, n - 1)
+        else:
+            # S_init: each timestep as a singleton set so extract_subsequences
+            # can union them via set().union(*segment_ids)
+            S_init = [{i} for i in range(n)]
+
+        # Reshape 1-D activity trace to (n, 1) so extract_subsequences returns 2-D arrays
+        trace_2d = np.array(seq, dtype=float).reshape(-1, 1)
+
+        S = distribution_based_segmentation(
+            trace=trace_2d,
+            S_init=S_init,
+            K=k,
+            m=m,
+            D=lambda x, y: calculate_mmd_distance(x, y, sigma=sigma),
+            embedding_generator=lambda subseq: subseq,  # already 2-D from extract_subsequences
+        )
+
+        # S is a list of sublists; each sublist holds the S_init elements assigned to that
+        # segment (sets or sorted lists). Flatten each into a sorted list of ints.
+        segment_ids = [
+            sorted(set().union(*[s if isinstance(s, set) else set(s) for s in seg]))
+            for seg in S
+        ]
+        segments = [[float(trace_2d[idx, 0]) for idx in ids] for ids in segment_ids]
+        return {"segments": segments, "segment_ids": segment_ids}
+
+    return _segment
+
 
 
 # ── Random ──────────────────────────────────────────────────────────
@@ -240,6 +348,54 @@ def _boundaries_to_result(seq: list, cps: list) -> SegmentResult:
         segments.append(vals)
 
     return {"segments": segments, "segment_ids": segment_ids}
+
+
+# ── Parallel batch application ──────────────────────────────────────
+
+def _parallel_worker(args):
+    """Top-level worker so it can be pickled by ProcessPoolExecutor."""
+    mode, kwargs, i, case = args
+    segmenter = get_segmenter(mode, **kwargs)
+    trace = case[0, :, 0]
+    return i, segmenter(trace)
+
+
+def apply_segmenter_parallel(mode: str, cases, n_workers=None, **kwargs) -> list:
+    """Apply any segmentation strategy in parallel across cases.
+
+    Parameters
+    ----------
+    mode : str
+        Segmentation mode passed to get_segmenter.
+    cases : sequence
+        Each element is a case array with shape (1, seq_len, n_features).
+    n_workers : int | None
+        Number of worker processes. Defaults to os.cpu_count().
+    **kwargs
+        Forwarded to get_segmenter (e.g. transition_matrix=..., seed=...).
+
+    Returns
+    -------
+    list of SegmentResult
+        Order matches the input cases.
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from tqdm import tqdm
+
+    args_list = [(mode, kwargs, i, case) for i, case in enumerate(cases)]
+    results: List[Optional[SegmentResult]] = [None] * len(args_list)
+
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(_parallel_worker, a): a[2] for a in args_list}
+        for future in tqdm(
+            as_completed(futures),
+            total=len(futures),
+            desc=f"{mode} segmentation (parallel)",
+        ):
+            i, segment = future.result()
+            results[i] = segment
+
+    return results
 
 
 # ── Self-test ───────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 import os
 import argparse
 import pandas as pd
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import numpy as np
 
@@ -240,35 +240,8 @@ def prepare_data(
     return_timestamps: bool = False,
     include_labels: bool = False,
 ):
-    if include_labels:
-        df = df.loc[
-            :,
-            [
-                "case:concept:name",
-                "concept:name",
-                "time:timestamp",
-                "case:LoanGoal",
-                "case:ApplicationType",
-                "EventOrigin",
-                "lifecycle:transition",
-                "case:RequestedAmount",
-                "outcome",
-            ],
-        ]
-    else:
-        df = df.loc[
-            :,
-            [
-                "case:concept:name",
-                "concept:name",
-                "time:timestamp",
-                "case:LoanGoal",
-                "case:ApplicationType",
-                "EventOrigin",
-                "lifecycle:transition",
-                "case:RequestedAmount",
-            ],
-        ]
+    if not include_labels:
+        df = df.loc[:, df.columns.drop("outcome")]
 
     cases_to_drop = df.groupby("case:concept:name").size() > 2
     cases_to_drop = cases_to_drop[cases_to_drop].index
@@ -520,7 +493,9 @@ def extract_one_offer_cases(trace_set, o_created_ind=15):
     return one_offer_ids, multiple_offers_ids
 
 
-def extract_explicands_samples(model, dataloader, prefix_len=15, explicands_num=10):
+def extract_explicands_samples(model: torch.nn.Module, dataloader: DataLoader, 
+                               prefix_len: int=15, explicands_num: Union[int, None]=10, 
+                               threshold: float=0.5, one_offer_cases: bool=True):
     """
     Extracting the prefixes of cases that will be explained in the experiments,
     including true positives and negatives, and false positives and negatives.
@@ -542,38 +517,43 @@ def extract_explicands_samples(model, dataloader, prefix_len=15, explicands_num=
 
     for ind, batch in enumerate(dataloader):
         x_cat, x_num, y_cat, _ = batch
-        x_cat, x_num, y_cat = (
-            x_cat[:, :prefix_len, :],
-            x_num[:, :prefix_len, :],
-            y_cat[:, :prefix_len],
-        )
-        x_cat, x_num = (x_cat.to(device), x_num.to(device))
-
-        attention_mask = (x_cat[..., 0] != 0).long()
-        out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
-        prediction = ((out.squeeze(1)) > 0.5).float()[0, -1].item()
-
-        case = np.concatenate([x_cat.numpy(), x_num.numpy()], axis=-1)
-        y_true = float(y_cat[0, -1].item())
-        sample_name = ""
-
-        # Extracting true positives and negatives
-        if prediction == y_true:
-            if prediction == 0:
-                sample_name = "tn"
-            else:
-                sample_name = "tp"
-        # Extracting misclassified cases
+        if x_cat.shape[1] < prefix_len:
+            continue
+        if 14 in x_cat[0, :prefix_len, 0] or 13 in x_cat[0, :prefix_len, 0]:
+            continue
         else:
-            if prediction == 1:
-                sample_name = "fp"
-            else:
-                sample_name = "fn"
+            x_cat, x_num, y_cat = (
+                x_cat[:, :prefix_len, :],
+                x_num[:, :prefix_len, :],
+                y_cat[:, :prefix_len],
+            )
+            x_cat, x_num = (x_cat.to(device), x_num.to(device))
 
-        pred_cases_info[sample_name]["ids"].append(ind)
-        pred_cases_info[sample_name]["cases"].append(case)
-        pred_cases_info[sample_name]["y_pred"].append(out.squeeze(1)[0, -1].item())
-        pred_cases_info[sample_name]["y_true"].append(y_true)
+            attention_mask = (x_cat[..., 0] != 0).long()
+            out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
+            prediction = ((out.squeeze(1)) > threshold).float()[0, -1].item()
+
+            case = np.concatenate([x_cat.numpy(), x_num.numpy()], axis=-1)
+            y_true = float(y_cat[0, -1].item())
+            sample_name = ""
+
+            # Extracting true positives and negatives
+            if prediction == y_true:
+                if prediction == 0:
+                    sample_name = "tn"
+                else:
+                    sample_name = "tp"
+            # Extracting misclassified cases
+            else:
+                if prediction == 1:
+                    sample_name = "fp"
+                else:
+                    sample_name = "fn"
+
+            pred_cases_info[sample_name]["ids"].append(ind)
+            pred_cases_info[sample_name]["cases"].append(case)
+            pred_cases_info[sample_name]["y_pred"].append(out.squeeze(1)[0, -1].item())
+            pred_cases_info[sample_name]["y_true"].append(y_true)
 
     print(
         "TP case number ('O_Cancelled' correctly pred):",
@@ -592,22 +572,25 @@ def extract_explicands_samples(model, dataloader, prefix_len=15, explicands_num=
         len(pred_cases_info["fn"]["cases"]),
     )
 
-    explicands_w_one_offer = {}
+    if one_offer_cases:
+        explicands_w_one_offer = {}
 
-    for sample_name in ["tp", "tn", "fp", "fn"]:
-        sample_one_offer_ids, _ = extract_one_offer_cases(
-            [trace[0, :, 0] for trace in pred_cases_info[sample_name]["cases"]]
-        )
-        indices = sample_one_offer_ids[:explicands_num]
-        explicands_w_one_offer[sample_name] = {
-            "cases": [pred_cases_info[sample_name]["cases"][idx] for idx in indices],
-            "predictions": [
-                pred_cases_info[sample_name]["y_pred"][idx] for idx in indices
-            ],
-            "labels": [pred_cases_info[sample_name]["y_true"][idx] for idx in indices],
-        }
+        for sample_name in ["tp", "tn", "fp", "fn"]:
+            sample_one_offer_ids, _ = extract_one_offer_cases(
+                [trace[0, :, 0] for trace in pred_cases_info[sample_name]["cases"]]
+            )
+            indices = sample_one_offer_ids[:explicands_num]
+            explicands_w_one_offer[sample_name] = {
+                "cases": [pred_cases_info[sample_name]["cases"][idx] for idx in indices],
+                "predictions": [
+                    pred_cases_info[sample_name]["y_pred"][idx] for idx in indices
+                ],
+                "labels": [pred_cases_info[sample_name]["y_true"][idx] for idx in indices],
+            }
 
-    return explicands_w_one_offer
+        return explicands_w_one_offer
+    
+    return pred_cases_info
 
 
 def calculate_accuracy_per_position(
@@ -697,3 +680,17 @@ def calculate_accuracy_per_position(
         "accuracies": accuracies,
         "valid_counts": valid_counts,
     }
+
+    # import pandas as pd
+
+    # df = pd.read_csv("a.csv")
+
+    # plt.figure(figsize=(10, 6))
+    # plt.plot(df['acc position'], df['acc_train'], label='Train Accuracy')
+    # plt.plot(df['acc position'], df['acc_test'], label='Test Accuracy')
+    # plt.xlabel('Accuracy Position')
+    # plt.ylabel('Accuracy')
+    # plt.title('Accuracy per Position for Train and Test Sets')
+    # plt.legend()
+    # plt.grid(True)
+    # plt.savefig("accuracy_per_position.png")

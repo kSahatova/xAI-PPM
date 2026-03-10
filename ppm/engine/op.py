@@ -1,3 +1,5 @@
+import uuid
+
 import torch
 from torch.nn import Module
 from torch.utils.data import DataLoader
@@ -45,7 +47,7 @@ def train_step(
         )
 
         attention_mask = (x_cat[..., 0] != 0).long()
-        total_targets += attention_mask.sum() #y_cat.shape[0]  
+        total_targets += attention_mask.sum().item() #y_cat.shape[0]  
 
         optimizer.zero_grad()
         out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask) # sigmoid inside model
@@ -231,8 +233,10 @@ def train_engine(
                 save_checkpoint(
                     checkpoint_dir=config["checkpoint_dir"],
                     checkpoint=cpkt,
-                    experiment_id="{}_{}_{}_{}".format(config["log"], config["backbone"], 
-                                                       config["categorical_targets"][0], config["log"].lower()),
+                    experiment_id="{}_{}_{}_{}".format(config["backbone"], 
+                                                       config["categorical_targets"][0],
+                                                       config["log"].lower(),
+                                                       str(uuid.uuid4())[:8].replace("-", "")),
                 )
 
         if activity_loss < best_loss:

@@ -1,3 +1,5 @@
+from typing import OrderedDict, Tuple, Optional
+
 import torch
 import pandas as pd
 
@@ -37,12 +39,16 @@ NUMERICAL_FEATURES = [
 
 
 def setup_dataloaders(config: dict, log: pd.DataFrame, unbiased_split_params):
+    
+    train_timestamps, test_timestamps = None, None
+    
     if config["dataset"] == "BPI17":
         result = prepare_data(
             log,
             unbiased_split_params,
             NUMERICAL_FEATURES,
             include_labels=True,
+            return_timestamps=True
         )
         # prepare_data may return either (train, test) or (train, test, train_timestamps, test_timestamps)
         if isinstance(result, tuple) and len(result) == 4:
@@ -110,6 +116,10 @@ def setup_dataloaders(config: dict, log: pd.DataFrame, unbiased_split_params):
         collate_fn=continuous,
     )
 
+    if (train_timestamps is not None) and (test_timestamps is not None):
+        train_dataset.timestamps = train_timestamps
+        test_dataset.timestamps = test_timestamps
+
     test_loader = DataLoader(
         test_dataset,
         batch_size=config["batch_size"],
@@ -142,6 +152,43 @@ def setup_model(
     model.load_state_dict(ckpt)
 
     return model
+
+
+def create_loader_from_dataframe(df: pd.DataFrame, config: dict, cf_vocab: Tuple[OrderedDict, OrderedDict]):
+    
+    event_features = EventFeatures(
+        categorical=config["categorical_features"],
+        numerical=config["continuous_features"],
+    )
+    event_targets = EventTargets(
+        categorical=config["categorical_targets"],
+        numerical=config["continuous_targets"],
+    )
+
+    event_log = EventLog(
+        dataframe=df,
+        case_id="case_id",
+        features=event_features,
+        targets=event_targets,
+        train_split=False,
+        name=config["dataset"],
+        vocabs=cf_vocab,
+    )
+
+    dataset = ContinuousTraces(
+        log=event_log,
+        refresh_cache=True,
+        device=config['device'],
+    )
+
+    data_loader = DataLoader(
+        dataset,
+        batch_size=config["batch_size"],
+        shuffle=False,
+        collate_fn=continuous,
+    )
+
+    return data_loader
 
 
 def load_data_and_model(config_path: str, checkpoint_path: str):

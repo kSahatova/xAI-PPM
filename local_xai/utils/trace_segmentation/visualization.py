@@ -38,7 +38,7 @@ def plot_segmented_trace_vertical(
     # Create segment membership mapping
     segment_membership = {}
     for (start, end), color in seg_boundaries_colors.items():
-        for i in range(start, end + 1):  
+        for i in range(start, end + 1):
             if i < trace_length:
                 segment_membership[i] = color
 
@@ -106,7 +106,7 @@ def plot_segmented_trace_vertical(
         ax.text(
             1.05,
             mid_y,
-            f"Seg {seg_num + 1}\n({segment_length})",
+            f"Seg {seg_num + 1} ({segment_length})",
             ha="left",
             va="center",
             fontsize=9,
@@ -123,14 +123,114 @@ def plot_segmented_trace_vertical(
     return fig
 
 
-def plot_multi_segmented_traces(cases, 
-                                predictions, 
-                                labels,
-                                breakpoints: List[Dict],
-                                plot_flag: bool = True, 
-                                output_dir: str = '',
-                                activity_lookup: dict = {}, 
-                                palette: sns.palettes._ColorPalette = sns.color_palette()):
+def plot_segmented_trace_horizontal(
+    trace: np.ndarray,
+    seg_boundaries_colors: Dict[Tuple[int, int], Tuple],
+    activity_lookup: Dict[int, str],
+    figsize: Tuple[int, int] = (12, 8),
+    cell_width: float = 1,
+    show_indices: bool = True,
+    title: str = "Trace Segmentation",
+):
+    """
+    Visualize trace activities horizontally with colored segments.
+
+    Same arguments as `plot_segmented_trace_vertical`, except that
+    `cell_width` replaces `cell_height`.
+    """
+    activity_tokens = trace.astype(int)
+    trace_length = len(activity_tokens)
+
+    segment_membership = {}
+    for (start, end), color in seg_boundaries_colors.items():
+        for i in range(start, end + 1):
+            if i < trace_length:
+                segment_membership[i] = color
+
+    fig, ax = plt.subplots(figsize=figsize, facecolor="white")
+    ax.set_facecolor("white")
+
+    for i, token in enumerate(activity_tokens):
+        x_pos = i
+        color = segment_membership.get(i, (0.85, 0.85, 0.85))
+
+        rect = patches.Rectangle(
+            (x_pos, 0),
+            cell_width,
+            1,
+            linewidth=0,
+            edgecolor="none",
+            facecolor=color,
+            alpha=0.6,
+        )
+        ax.add_patch(rect)
+
+        activity_name = activity_lookup.get(token, f"Activity_{token}")
+        ax.text(
+            x_pos + cell_width / 2,
+            0.5,
+            activity_name,
+            ha="center",
+            va="center",
+            fontsize=6,
+            rotation=90,
+            fontweight="bold",
+            color="black",
+        )
+
+        if show_indices:
+            ax.text(
+                x_pos + cell_width / 2,
+                0.15,
+                f"{i}",
+                ha="center",
+                va="top",
+                fontsize=8,
+                color="gray",
+            )
+
+    ax.set_ylim(-0.2 if show_indices else 0, 1)
+    ax.set_xlim(0, trace_length)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title(title, fontsize=14, fontweight="bold", pad=20, color="black")
+
+    for seg_num, ((start, end), color) in enumerate(seg_boundaries_colors.items()):
+        mid_x = (start + end) / 2
+        segment_length = end - start + 1
+        ax.text(
+            mid_x,
+            -0.2,
+            f"Seg {seg_num + 1}\n({segment_length})",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            bbox=dict(
+                boxstyle="round,pad=0.3",
+                facecolor=color,
+                edgecolor="black",
+                alpha=0.7,
+            ),
+        )
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["bottom"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+
+    return fig
+
+
+def plot_multi_segmented_traces(
+    cases,
+    predictions,
+    labels,
+    breakpoints: List[Dict],
+    plot_flag: bool = True,
+    output_dir: str = "",
+    activity_lookup: dict = {},
+    palette: sns.palettes._ColorPalette = sns.color_palette(),
+):
     segments = []
 
     for i, (case, pred, label) in enumerate(zip(cases, predictions, labels)):
@@ -145,18 +245,40 @@ def plot_multi_segmented_traces(cases,
             else:
                 trace_segments[-1].append(t)
                 trace_seg_ids[-1].append(j)
-        segments.append({'segments': trace_segments, 'segment_ids':  trace_seg_ids}) 
-        
+        segments.append({"segments": trace_segments, "segment_ids": trace_seg_ids})
+
         if plot_flag:
             seg_boundaries = {}
             for c, seg in enumerate(trace_seg_ids):
                 seg_boundaries[(seg[0], seg[-1])] = palette[c]
-            figure = plot_segmented_trace_vertical(trace, figsize=(3, 7),
-                                        seg_boundaries_colors=seg_boundaries, 
-                                        activity_lookup=activity_lookup, 
-                                        title=f'y_pred = {round(pred, 3)} | y_true = {label}')
-            figure.savefig(osp.join(output_dir, f'case_{i}.png'), dpi=300, 
-                        facecolor='white', edgecolor='white', bbox_inches='tight')
+            figure = plot_segmented_trace_vertical(
+                trace,
+                figsize=(3, 7),
+                seg_boundaries_colors=seg_boundaries,
+                activity_lookup=activity_lookup,
+                title=f"y_pred = {round(pred, 3)} | y_true = {label}",
+            )
+            figure.savefig(
+                osp.join(output_dir, f"case_{i}.png"),
+                dpi=300,
+                facecolor="white",
+                edgecolor="white",
+                bbox_inches="tight",
+            )
             plt.close()
 
     return segments
+
+
+def plot_transition_matrix(transition_matrix):
+    plt.style.use("seaborn-v0_8-whitegrid")
+    plt.figure(figsize=(15, 10))
+    ax = sns.heatmap(
+        transition_matrix,
+        annot=True,
+        fmt=".2f",
+    )
+    ax.set_title("Normalized Adjacency Matrix of BPIC17 Train Event Log")
+    ax.set_xlabel("Next event")
+    ax.set_ylabel("Current event")
+    plt.show()
