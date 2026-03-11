@@ -1,3 +1,5 @@
+import numpy as np
+import pandas as pd
 import pprint
 import wandb
 # from wandb import WANDB_AVAILABLE
@@ -73,22 +75,44 @@ PRETRAINED_CONFIGS = {
 
 EVENT_LOGS = {"BPI17": BPI17, "Sepsis": Sepsis}
 
+def extract_timestamp_features(group):
+    """extract the time since the last event in minutes"""
+    group = group.sort_values("time:timestamp", ascending=False, kind='mergesort')
+    
+    tmp = group["time:timestamp"] - group["time:timestamp"].shift(-1)
+    tmp = tmp.fillna(pd.Timedelta(0))
+    group["timesincelastevent"] = tmp.apply(lambda x: float(x / np.timedelta64(1, 'm'))) # m is for minutes
+    group = group.sort_values("time:timestamp", ascending=True, kind='mergesort')
+    return group
+
+def check_if_activity_exists_and_time_less_than(group, activity):
+    relevant_activity_idxs = np.where(group["concept:name"] == activity)[0]
+    if len(relevant_activity_idxs) > 0:
+        idx = relevant_activity_idxs[0]
+        if group["timesincelastevent"].iloc[idx] <= 28 * 1440: # return in less than 28 days
+            group["outcome"] = 1
+            return group[:idx]
+        else:
+            group["outcome"] = 0
+            return group[:idx]
+    else:
+        group["outcome"] = 0
+        return group
 
 def main(training_config: dict):
     log = EVENT_LOGS[training_config["log"]](cache_folder="data/")
 
     column_schema = getattr(DatasetSchemas, training_config["log"])()
-    if training_config["log"] == "BPI17":
-        labels_dict = {"O_Accepted": 0, "O_Cancelled": 1, "O_Refused": 2}
-        labeled_df = add_outcome_labels(log.dataframe, column_schema, labels_dict)
-    elif training_config["log"] == "Sepsis":
-        labels_dict = {"Return ER": 0, "No Return ER": 1}
-        labeled_df = log.dataframe.copy()
-        labeled_df["outcome"] = labeled_df["case:concept:name"].apply(
-            lambda x: 0 if "Return ER" in log.dataframe[log.dataframe["case:concept:name"] == x]["concept:name"].values else 1
-        )
-        # labeled_df = add_outcome_labels_for_sepsis(log.dataframe, column_schema, labels_dict) # ToDo
 
+    # labels_dict = {"Return ER": 0, "No Return ER": 1}
+    labeled_df = log.dataframe.copy()
+    # labeled_df["outcome"] = labeled_df["case:concept:name"].apply(
+    #     lambda x: 0 if "Return ER" in log.dataframe[log.dataframe["case:concept:name"] == x]["concept:name"].values else 1
+    # )
+    labeled_df = labeled_df.groupby("case:concept:name").apply(extract_timestamp_features).reset_index(level=0)
+    labeled_df = labeled_df.groupby("case:concept:name").apply(
+        lambda group: check_if_activity_exists_and_time_less_than(group, "Return ER")
+    ).reset_index(level=0)
 
     result = prepare_sepsis_data(
         labeled_df,
