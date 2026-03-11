@@ -18,9 +18,12 @@ from ppm.datasets import DatasetColumnSchema
 
 from ppm.models.config import FreezingConfig
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import roc_auc_score
 
 from skpm.feature_extraction import TimestampExtractor
 import matplotlib.pyplot as plt
+from matplotlib import ticker
+plt.style.use("seaborn-v0_8-whitegrid")
 
 
 def ensure_dir(path):
@@ -530,7 +533,6 @@ def calculate_accuracy(model: torch.nn.Module, data_loader: DataLoader, device: 
             attention_mask = (x_cat[..., 0] != 0).long()
             total_targets += attention_mask.sum().item()
 
-            # with torch.autocast(device_type=device, dtype=torch.float16):
             out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
 
             predictions = ((out.squeeze(-1)) > 0.5).float()
@@ -543,7 +545,6 @@ def calculate_accuracy(model: torch.nn.Module, data_loader: DataLoader, device: 
                 .item()
             )
             accuracy += acc
-
     print("Accuracy of the model: {:.3%}".format(accuracy / total_targets))
 
 
@@ -581,46 +582,51 @@ def extract_explicands_samples(model: torch.nn.Module, dataloader: DataLoader,
     }
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    # TODO: change the "if"
+    ds_name = dataloader.dataset.log.name.lower()
 
     for ind, batch in enumerate(dataloader):
         x_cat, x_num, y_cat, _ = batch
         if x_cat.shape[1] < prefix_len:
             continue
-        if 14 in x_cat[0, :prefix_len, 0] or 13 in x_cat[0, :prefix_len, 0]:
-            continue
-        else:
-            x_cat, x_num, y_cat = (
-                x_cat[:, :prefix_len, :],
-                x_num[:, :prefix_len, :],
-                y_cat[:, :prefix_len],
-            )
-            x_cat, x_num = (x_cat.to(device), x_num.to(device))
+        if ds_name == 'bpi17':
+            if 14 in x_cat[0, :prefix_len, 0] or 13 in x_cat[0, :prefix_len, 0]:
+                continue
+        elif ds_name == 'sepsis':
+            if 18 in x_cat[0, :prefix_len, 0]:
+                continue
+        x_cat, x_num, y_cat = (
+            x_cat[:, :prefix_len, :],
+            x_num[:, :prefix_len, :],
+            y_cat[:, :prefix_len],
+        )
+        x_cat, x_num = (x_cat.to(device), x_num.to(device))
 
-            attention_mask = (x_cat[..., 0] != 0).long()
-            out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
-            prediction = ((out.squeeze(1)) > threshold).float()[0, -1].item()
+        attention_mask = (x_cat[..., 0] != 0).long()
+        out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
+        prediction = ((out.squeeze(1)) > threshold).float()[0, -1].item()
 
-            case = np.concatenate([x_cat.numpy(), x_num.numpy()], axis=-1)
-            y_true = float(y_cat[0, -1].item())
-            sample_name = ""
+        case = np.concatenate([x_cat.numpy(), x_num.numpy()], axis=-1)
+        y_true = float(y_cat[0, -1].item())
+        sample_name = ""
 
-            # Extracting true positives and negatives
-            if prediction == y_true:
-                if prediction == 0:
-                    sample_name = "tn"
-                else:
-                    sample_name = "tp"
-            # Extracting misclassified cases
+        # Extracting true positives and negatives
+        if prediction == y_true:
+            if prediction == 0:
+                sample_name = "tn"
             else:
-                if prediction == 1:
-                    sample_name = "fp"
-                else:
-                    sample_name = "fn"
+                sample_name = "tp"
+        # Extracting misclassified cases
+        else:
+            if prediction == 1:
+                sample_name = "fp"
+            else:
+                sample_name = "fn"
 
-            pred_cases_info[sample_name]["ids"].append(ind)
-            pred_cases_info[sample_name]["cases"].append(case)
-            pred_cases_info[sample_name]["y_pred"].append(out.squeeze(1)[0, -1].item())
-            pred_cases_info[sample_name]["y_true"].append(y_true)
+        pred_cases_info[sample_name]["ids"].append(ind)
+        pred_cases_info[sample_name]["cases"].append(case)
+        pred_cases_info[sample_name]["y_pred"].append(out.squeeze(1)[0, -1].item())
+        pred_cases_info[sample_name]["y_true"].append(y_true)
 
     print(
         "TP case number ('O_Cancelled' correctly pred):",
@@ -660,8 +666,35 @@ def extract_explicands_samples(model: torch.nn.Module, dataloader: DataLoader,
     return pred_cases_info
 
 
+def calculate_auc(model, dataloader, device):
+    
+    predictions = []
+    true_labels = []
+    model.eval()
+
+    with torch.inference_mode():
+        for items in dataloader:
+            x_cat, x_num, y_cat, y_num = items
+            x_cat, x_num, y_cat, y_num = (
+                x_cat.to(device),
+                x_num.to(device),
+                y_cat.to(device),
+                y_num.to(device),
+            )
+
+            true_labels.append(y_cat[0, -1,  :])
+            attention_mask = (x_cat[..., 0] != 0).long()
+
+            out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
+            predictions.append(out[0, -1, :])
+
+    auc =  roc_auc_score(true_labels, predictions)
+    print("AUC of the model: {:.3%}".format(auc))
+
+
+
 def calculate_accuracy_per_position(
-    model, data_loader, device: str = "cuda", save_path: str = None, show: bool = True
+    model, dataloader, device: str = "cuda", save_path: str = None, show: bool = True
 ):
     """Compute and plot accuracy per prefix position.
 
@@ -676,7 +709,7 @@ def calculate_accuracy_per_position(
     valid_positions = {}
 
     with torch.inference_mode():
-        for items in data_loader:
+        for items in dataloader:
             x_cat, x_num, y_cat, y_num = items
             x_cat, x_num, y_cat, y_num = (
                 x_cat.to(device),
@@ -723,17 +756,19 @@ def calculate_accuracy_per_position(
         accuracies.append(acc)
 
     # Plot
-    plt.figure(figsize=(10, 4))
-    plt.plot(positions, accuracies, marker="o", linestyle="-", color="C0")
-    plt.xlabel("Position (prefix length)")
-    plt.ylabel("Accuracy")
-    plt.title("Model accuracy per prefix position")
+    plt.figure(figsize=(10, 5))
+    plt.gca().yaxis.set_major_locator(ticker.MultipleLocator(0.1))
+    plt.plot(pos_indices, accuracies, color='tab:blue', label='Test Accuracy', marker="o", linestyle="-",)
     plt.ylim(0.0, 1.0)
-    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.xlabel('Prefix Length')
+    plt.ylabel('Accuracy')
+    plt.title('Accuracy per position for test set')
+    plt.legend()
+    plt.grid(True)
 
     # Annotate with counts (optional small text)
-    for x, y, c in zip(positions, accuracies, valid_counts):
-        plt.text(x, max(0.0, y - 0.04), f"n={c}", ha="center", fontsize=8)
+    # for x, y, c in zip(positions, accuracies, valid_counts):
+    #     plt.text(x, max(0.0, y - 0.04), f"n={c}", ha="center", fontsize=8)
 
     if save_path:
         plt.savefig(save_path, bbox_inches="tight")

@@ -241,6 +241,7 @@ class DatasetSchemas:
             ],
             static_num_cols=["case:RequestedAmount"],
         )
+    
     @staticmethod
     def Sepsis() -> DatasetColumnSchema:
         """Schema for Sepsis dataset"""

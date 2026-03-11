@@ -14,6 +14,7 @@ from ppm import models as ppm_models
 from ppm.engine.utils import load_checkpoint
 from ppm.utils import (
     prepare_data,
+    prepare_sepsis_data,
     prepare_simbank_data,
     get_model_config,
     parse_args,
@@ -38,7 +39,7 @@ NUMERICAL_FEATURES = [
 ]
 
 
-def setup_dataloaders(config: dict, log: pd.DataFrame, unbiased_split_params):
+def setup_dataloaders(config: dict, log: pd.DataFrame, unbiased_split_params: Optional[dict]):
     
     train_timestamps, test_timestamps = None, None
     
@@ -51,18 +52,27 @@ def setup_dataloaders(config: dict, log: pd.DataFrame, unbiased_split_params):
             return_timestamps=True
         )
         # prepare_data may return either (train, test) or (train, test, train_timestamps, test_timestamps)
-        if isinstance(result, tuple) and len(result) == 4:
-            train, test, train_timestamps, test_timestamps = result
-        elif isinstance(result, tuple) and len(result) == 2:
-            train, test = result
-        else:
-            raise ValueError("Unexpected return value from prepare_data()")
+        
     elif config["dataset"] == "synthetic":
-        train, test = prepare_simbank_data(log, NUMERICAL_FEATURES)
+        result = prepare_simbank_data(log, NUMERICAL_FEATURES)
+    elif config["dataset"]  == "Sepsis":
+        result =  prepare_sepsis_data(
+                        log,
+                        NUMERICAL_FEATURES,
+                        include_labels=True,
+                        return_timestamps=True
+                    )
     else:
         raise ValueError(
             f"The data preprocessing function has not been implemented for the log {config['log']}"
         )
+    
+    if isinstance(result, tuple) and len(result) == 4:
+        train, test, train_timestamps, test_timestamps = result
+    elif isinstance(result, tuple) and len(result) == 2:
+        train, test = result
+    else:
+        raise ValueError("Unexpected return value from prepare_data()")
 
     event_features = EventFeatures(
         categorical=config["categorical_features"],
@@ -202,10 +212,15 @@ def load_data_and_model(config_path: str, checkpoint_path: str):
     model : nn.Module  (already in eval mode)
     """
     torch.manual_seed(RANDOM_SEED)
-    LABELS_DICT = {"O_Accepted": 0, "O_Cancelled": 1, "O_Refused": 2}
 
     args = parse_args(config_path=config_path)
     config = vars(args)
+
+    if config["dataset"] == "BPI17":
+        LABELS_DICT = {"O_Accepted": 0, "O_Cancelled": 1, "O_Refused": 2}
+    elif config["dataset"] == "Sepsis":
+        LABELS_DICT = {"Return ER": 0, "No Return ER": 1}
+    
     config["continuous_features"] = (
         NUMERICAL_FEATURES
         if config["continuous_features"] == "all"
@@ -214,11 +229,19 @@ def load_data_and_model(config_path: str, checkpoint_path: str):
 
     log = getattr(event_logs, config["dataset"])()
     column_schema = getattr(DatasetSchemas, config["dataset"])()
-    labeled_df = add_outcome_labels(log.dataframe, column_schema, LABELS_DICT)
-    binary_labeled_df = labeled_df[labeled_df["outcome"] != 2]  # drop O_Refused
-
+    if config["dataset"] == "BPI17":
+        labeled_df = add_outcome_labels(log.dataframe, column_schema, LABELS_DICT)
+        binary_labeled_df = labeled_df[labeled_df["outcome"] != 2]  # drop O_Refused
+    
+    elif config["dataset"] == "Sepsis":
+        binary_labeled_df = log.dataframe.copy()
+        binary_labeled_df["outcome"] = binary_labeled_df["case:concept:name"].apply(
+            lambda x: 0 if "Return ER" in log.dataframe[log.dataframe["case:concept:name"] == x]["concept:name"].values else 1
+        )
+    
+    unbiased_split_kwargs = log.unbiased_split_params if log._unbiased_split_params is not None else {} 
     train_loader, test_loader = setup_dataloaders(
-        config, binary_labeled_df, log.unbiased_split_params
+        config, binary_labeled_df, unbiased_split_kwargs
     )
     model = setup_model(
         config,

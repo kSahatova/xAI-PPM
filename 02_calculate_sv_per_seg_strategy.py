@@ -13,40 +13,56 @@ from experiments.setup_experiment import (
     create_loader_from_dataframe,
 )
 
-from ppm.utils import extract_explicands_samples
-from local_xai.utils.trace_segmentation.segmentation_factory import apply_segmenter_parallel
+from ppm.utils import (
+    calculate_accuracy_per_position,
+    extract_explicands_samples,
+    calculate_accuracy,
+    calculate_auc
+)
+
+from local_xai.utils.trace_segmentation.segmentation_factory import (
+    apply_segmenter_parallel,
+)
 from local_xai.utils.trace_segmentation.transition_based import build_transition_matrix
 from local_xai.seqshap.calulate_seqshap_parallel import (
     compute_segment_shap_values_parallel,
 )
 from local_xai.utils.baseline_calculation import build_average_event_baseline
+from local_xai.utils.trace_segmentation.visualization import plot_transition_matrix
 from timeshap.wrappers.outcome_predictor_wrapper import OutcomePredictorWrapper
 
 
 SAMPLE_NAMES = ["tp", "fp", "fn", "tn"]
 
-# SEG_STRATEGIES = ["per_event", "distribution", "transition"]
-SEG_STRATEGIES = ["distribution"]
-PREFIX_LEN = 30
+SEG_STRATEGIES = ["per_event", "distribution", "transition"]
+PREFIX_LEN = 10  # 30
 
 PROJECT_DIR = r"D:\PycharmProjects\xAI-PPM"
 OUTPUT_ROOT = osp.join(PROJECT_DIR, r"outputs")
-config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op.txt")
-checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\BPI17_rnn_outcome_bpi17.pth")
+config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op_sepsis.txt")
+# checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\BPI17_rnn_outcome_bpi17.pth")
+checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\Sepsis_rnn_outcome_sepsis.pth")
 
 
 def main():
     # ── 1. Load data & model ────────────────────────────────────────
-    print("="*80)
+    print("=" * 80)
     print("Loading data and model")
-    print("="*80)
+    print("=" * 80)
     config, train_loader, test_loader, model = load_data_and_model(
         config_path, checkpoint_path
     )
+    # calculate_accuracy(model, test_loader, device=config["device"])
+    # calculate_accuracy_per_position(model, test_loader, device=config["device"], 
+    #                                 save_path=r'D:\PycharmProjects\xAI-PPM\accuracy_per_position_sepsis.png')
+    # calculate_auc(model, test_loader, config["device"])
+
+    ds_name = config["dataset"].lower()
 
     train_df = train_loader.dataset.log.dataframe
     unique_activities_num = train_df["activity"].nunique()
     transition_matrix = build_transition_matrix(train_df, unique_activities_num)
+    # plot_transition_matrix(transition_matrix)
 
     avg_event, _ = build_average_event_baseline(train_loader, config)
     wrapped_model = OutcomePredictorWrapper(
@@ -66,9 +82,9 @@ def main():
     )
 
     # ── 3c. Extract explicands with the defined prefix length ─────
-    print("="*80)
+    print("=" * 80)
     print("Extracting cases")
-    print("="*80)
+    print("=" * 80)
     case_ids = traces_len[(traces_len > Q1) & (traces_len < Q3)].dropna().index.tolist()
     red_test_df = test_df[test_df["case_id"].isin(case_ids)]
 
@@ -80,9 +96,17 @@ def main():
     )
     class_ratio = class_frequency / class_frequency.sum()
     print("\nClass disribution after the filtering of outliers")
-    print(
-        "Accepted:", class_ratio[0].round(4), "| Cancelled", class_ratio[1].round(4)
-    )
+    if ds_name == "bpi17":
+        print(
+            "Accepted:", class_ratio[0].round(4), "| Cancelled", class_ratio[1].round(4)
+        )
+    elif ds_name == "sepsis":
+        print(
+            "Return ER:",
+            class_ratio[0].round(4),
+            "| No Return ER",
+            class_ratio[1].round(4),
+        )
 
     red_test_loader = create_loader_from_dataframe(
         red_test_df, config, (identity_stoi, original_itos)
@@ -92,33 +116,35 @@ def main():
         red_test_loader,
         prefix_len=PREFIX_LEN,
         explicands_num=None,
-        threshold=0.7,
+        threshold=0.6,
         one_offer_cases=False,
     )
 
     # ── 4. Segment extracted cases ─────
-    print("="*80)
+    print("=" * 80)
     print("Starting trace segmentation")
-    print("="*80)
+    print("=" * 80)
     seg_strategy_kwargs = {
         "transition": {"transition_matrix": transition_matrix},
-        "distribution": {"min_window_size": 3, 
-                         "max_window_size": 3,
-                         "m": 5, # measuring window,
-                         "timestamp": test_loader.dataset.timestamps,
-                         },
+        "distribution": {
+            "min_window_size": 3,
+            "max_window_size": 3,
+            "m": 5,  # measuring window,
+            "timestamp": test_loader.dataset.timestamps,
+        },
         "per_event": {},
-        "random": {"num_change_points": 9, 'seed': 42}
+        "random": {"num_change_points": 9, "seed": 42},
     }
 
     for seg_strategy in SEG_STRATEGIES:
-
         sv_output_dir = osp.join(
-            OUTPUT_ROOT, "shap_values", "bpi17", f"{seg_strategy}_cohort_medium"
+            OUTPUT_ROOT, "shap_values", ds_name, f"{seg_strategy}_cohort_medium"
         )
 
         for name in SAMPLE_NAMES:
-            print(f"Applying '{seg_strategy}' segmentation strategy to the sample {name}")
+            print(
+                f"Applying '{seg_strategy}' segmentation strategy to the sample {name}"
+            )
 
             segments = apply_segmenter_parallel(
                 seg_strategy,
@@ -136,7 +162,7 @@ def main():
                 config,
                 output_dir=sv_output_dir,
                 save_plots=False,
-                n_workers=9
+                n_workers=9,
             )
             explicands_info[name]["sv"] = sv_results
 

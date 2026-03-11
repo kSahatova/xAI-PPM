@@ -37,16 +37,18 @@ TOP_N_PATTERNS = 10
 
 PROJECT_DIR = r"D:\PycharmProjects\xAI-PPM"
 OUTPUT_ROOT = osp.join(PROJECT_DIR, r"outputs")
-sv_output_dir = osp.join(OUTPUT_ROOT, "shap_values", "bpi17")
 
-config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op.txt")
-checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\BPI17_rnn_outcome_bpi17.pth")
+
+config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op_sepsis.txt")
+# config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op.txt")
+checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\Sepsis_rnn_outcome_sepsis.pth")
+# checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\BPI17_rnn_outcome_bpi17.pth")
 
 SAMPLE_META = {
-    "tp": dict(label="TP\n(cancelled, correct)",  color="#3D7AACB6"),
-    "fp": dict(label="FP\n(accepted, wrong)",     color="#DF9C38B6"),
-    "fn": dict(label="FN\n(cancelled, wrong)",    color="#EA5348B6"),
-    "tn": dict(label="TN\n(accepted, correct)",   color="#3E8540B6"),
+    "tp": dict(label="TP\n(cancelled, correct)", color="#3D7AACB6"),
+    "fp": dict(label="FP\n(accepted, wrong)", color="#DF9C38B6"),
+    "fn": dict(label="FN\n(cancelled, wrong)", color="#EA5348B6"),
+    "tn": dict(label="TN\n(accepted, correct)", color="#3E8540B6"),
 }
 
 SEG_STRATEGIES = ["per_event", "distribution", "transition"]
@@ -61,6 +63,7 @@ _SHAP_CMAP = LinearSegmentedColormap.from_list(
 
 
 # ── Data builders ──────────────────────────────────────────────────────────────
+
 
 def _change_points(segment_ids: list) -> Tuple[int, ...]:
     """Start index of every segment after the first (= the breakpoints)."""
@@ -85,8 +88,10 @@ def _activity_change_points(
     """
     seg_ids = sv_dict["segment_ids"]
     return tuple(
-        (int(case[0, seg_ids[i][-1], feature_idx]),
-         int(case[0, seg_ids[i + 1][0], feature_idx]))
+        (
+            int(case[0, seg_ids[i][-1], feature_idx]),
+            int(case[0, seg_ids[i + 1][0], feature_idx]),
+        )
         for i in range(len(seg_ids) - 1)
     )
 
@@ -110,14 +115,16 @@ def build_pattern_sv_df(explicands_info: Dict[str, Dict]) -> pd.DataFrame:
                 shap_values = np.asarray(sv_dict["segment_sv"]).ravel()
                 cp = _change_points(seg_ids)
                 for seg_idx, sv in enumerate(shap_values):
-                    rows.append({
-                        "cohort":     cohort,
-                        "sample":     sample,
-                        "trace_id":   trace_id,
-                        "pattern":    cp,
-                        "seg_idx":    seg_idx,
-                        "shap_value": float(sv),
-                    })
+                    rows.append(
+                        {
+                            "cohort": cohort,
+                            "sample": sample,
+                            "trace_id": trace_id,
+                            "pattern": cp,
+                            "seg_idx": seg_idx,
+                            "shap_value": float(sv),
+                        }
+                    )
 
     return pd.DataFrame(rows)
 
@@ -161,18 +168,13 @@ def build_heatmap_matrix(
 
     # trace counts per pattern
     trace_counts = (
-        sub.drop_duplicates(subset=["trace_id", "pattern"])
-        .groupby("pattern")
-        .size()
+        sub.drop_duplicates(subset=["trace_id", "pattern"]).groupby("pattern").size()
     )
 
     # mean SHAP per (pattern, seg_idx) — only for the top patterns
     pat_sub = sub[sub["pattern"].isin(patterns)]
     pivot = (
-        pat_sub
-        .groupby(["pattern", "seg_idx"])["shap_value"]
-        .mean()
-        .unstack("seg_idx")
+        pat_sub.groupby(["pattern", "seg_idx"])["shap_value"].mean().unstack("seg_idx")
     )
     pivot.columns = [f"seg {int(c) + 1}" for c in pivot.columns]
 
@@ -192,6 +194,7 @@ def build_heatmap_matrix(
 
 
 # ── Tile chart ─────────────────────────────────────────────────────────────────
+
 
 def plot_tile_charts(
     df: pd.DataFrame,
@@ -215,7 +218,8 @@ def plot_tile_charts(
 
     for cohort in cohorts:
         fig, axes = plt.subplots(
-            1, len(samples),
+            1,
+            len(samples),
             figsize=(5.5 * len(samples) + 1.2, 0.5 * top_n + 2.5),
             squeeze=False,
         )
@@ -225,8 +229,16 @@ def plot_tile_charts(
             matrix, _ = build_heatmap_matrix(df, cohort, sample, top_n)
 
             if matrix.empty:
-                ax.text(0.5, 0.5, "no data", ha="center", va="center",
-                        transform=ax.transAxes, fontsize=9, color="gray")
+                ax.text(
+                    0.5,
+                    0.5,
+                    "no data",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                    fontsize=9,
+                    color="gray",
+                )
                 ax.set_axis_off()
                 continue
 
@@ -250,8 +262,8 @@ def plot_tile_charts(
             )
             ax.set_xlabel("Segment position", fontsize=10)
             ax.set_ylabel("Change-point pattern" if c == 0 else "", fontsize=10)
-            ax.tick_params(axis="x", rotation=0,  labelsize=8)
-            ax.tick_params(axis="y", rotation=0,  labelsize=7.5)
+            ax.tick_params(axis="x", rotation=0, labelsize=8)
+            ax.tick_params(axis="y", rotation=0, labelsize=7.5)
 
         # ── shared colorbar ────────────────────────────────────────────
         sm = ScalarMappable(
@@ -268,7 +280,8 @@ def plot_tile_charts(
 
         fig.suptitle(
             f"Most frequent segment patterns — cohort: {cohort}  (top {top_n})",
-            fontsize=13, y=1.01,
+            fontsize=13,
+            y=1.01,
         )
 
         if output_path:
@@ -283,6 +296,7 @@ def plot_tile_charts(
 
 
 # ── Activity-segment tile chart ────────────────────────────────────────────────
+
 
 def _build_sample_segment_summary(
     sv_list: list,
@@ -309,7 +323,7 @@ def _build_sample_segment_summary(
     for trace_id, sv_dict in enumerate(sv_list):
         if _change_points(sv_dict["segment_ids"]) != pattern:
             continue
-        case = cases_list[trace_id]          # shape (1, prefix_len, n_features)
+        case = cases_list[trace_id]  # shape (1, prefix_len, n_features)
         for seg_idx, event_indices in enumerate(sv_dict["segment_ids"]):
             for event_idx in event_indices:
                 act_code = int(case[0, event_idx, 0])
@@ -320,11 +334,13 @@ def _build_sample_segment_summary(
     for seg_idx in sorted(seg_activities):
         acts = seg_activities[seg_idx]
         top_act, top_count = Counter(acts).most_common(1)[0]
-        rows.append({
-            "seg_idx":     seg_idx,
-            "top_activity": top_act,
-            "proportion":  top_count / len(acts),
-        })
+        rows.append(
+            {
+                "seg_idx": seg_idx,
+                "top_activity": top_act,
+                "proportion": top_count / len(acts),
+            }
+        )
 
     return pattern, n_traces, pd.DataFrame(rows).set_index("seg_idx")
 
@@ -381,7 +397,7 @@ def plot_activity_segment_tile(
     for sample in samples:
         pattern, n_traces, summary = sample_data[sample]
         props = {int(k): float(v) for k, v in summary["proportion"].items()}  # type: ignore[arg-type]
-        acts = {int(k): str(v) for k, v in summary["top_activity"].items()}   # type: ignore[arg-type]
+        acts = {int(k): str(v) for k, v in summary["top_activity"].items()}  # type: ignore[arg-type]
         for seg_idx, proportion in props.items():
             col = f"seg {seg_idx + 1}"
             act = acts[seg_idx]
@@ -400,9 +416,7 @@ def plot_activity_segment_tile(
     annot_matrix.index = row_labels
 
     # ── 4. Plot ─────────────────────────────────────────────────────
-    fig, ax = plt.subplots(
-        figsize=(max(6, 2.8 * n_segs + 2), 1.8 * len(samples) + 1.5)
-    )
+    fig, ax = plt.subplots(figsize=(max(6, 2.8 * n_segs + 2), 1.8 * len(samples) + 1.5))
 
     sns.heatmap(
         prop_matrix.astype(float),
@@ -440,6 +454,7 @@ def plot_activity_segment_tile(
 
 # ── Individual-trace strip chart ───────────────────────────────────────────────
 
+
 def plot_individual_traces(
     explicands_info: Dict,
     activity_lookup: dict,
@@ -463,20 +478,19 @@ def plot_individual_traces(
         - "activity"   : by the tuple of (from_act, to_act) pairs at each
                          segment boundary — position-invariant grouping
     """
-    sv_list    = explicands_info[sample].get("sv",    [])
+    sv_list = explicands_info[sample].get("sv", [])
     cases_list = explicands_info[sample].get("cases", [])
 
     # ── 1. Compute patterns and select one representative per top-k ───
     if pattern_type == "activity":
         all_patterns = [
-            _activity_change_points(sv, cases_list[i])
-            for i, sv in enumerate(sv_list)
+            _activity_change_points(sv, cases_list[i]) for i, sv in enumerate(sv_list)
         ]
     else:
         all_patterns = [_change_points(sv["segment_ids"]) for sv in sv_list]
 
     pattern_counts = Counter(all_patterns)
-    top_patterns   = [pat for pat, _ in pattern_counts.most_common(n_cases)]
+    top_patterns = [pat for pat, _ in pattern_counts.most_common(n_cases)]
 
     # total_traces = len(all_patterns)
     # covered      = sum(pattern_counts[p] for p in top_patterns)
@@ -484,7 +498,9 @@ def plot_individual_traces(
     #       f"{covered}/{total_traces} traces ({100 * covered / total_traces:.1f}%)")
 
     # For each top pattern pick the first matching trace
-    selected: List[Tuple[int, dict, tuple, int]] = []   # (tid, sv_dict, pattern, pat_count)
+    selected: List[
+        Tuple[int, dict, tuple, int]
+    ] = []  # (tid, sv_dict, pattern, pat_count)
     seen: set = set()
     for tid in range(len(sv_list)):
         pat = all_patterns[tid]
@@ -498,8 +514,16 @@ def plot_individual_traces(
 
     if not selected:
         fig, ax = plt.subplots()
-        ax.text(0.5, 0.5, "no data", ha="center", va="center",
-                transform=ax.transAxes, fontsize=10, color="gray")
+        ax.text(
+            0.5,
+            0.5,
+            "no data",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+            fontsize=10,
+            color="gray",
+        )
         return fig
 
     # ── 2. Shared SHAP colour scale ──────────────────────────────────
@@ -512,15 +536,12 @@ def plot_individual_traces(
     norm = TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
 
     # ── 3. Layout constants ──────────────────────────────────────────
-    cell_w = 1.0   # width of one event cell (data units)
-    row_h  = 1.4   # height of each trace row
-    gap    = 0.3   # vertical gap between rows
-    n      = len(selected)
+    cell_w = 1.0  # width of one event cell (data units)
+    row_h = 1.4  # height of each trace row
+    gap = 0.3  # vertical gap between rows
+    n = len(selected)
 
-    trace_len = max(
-        sv_dict["segment_ids"][-1][-1] + 1
-        for _, sv_dict, *_ in selected
-    )
+    trace_len = max(sv_dict["segment_ids"][-1][-1] + 1 for _, sv_dict, *_ in selected)
 
     fig, ax = plt.subplots(
         figsize=(max(14, trace_len * 0.6 + 4), n * (row_h + gap) + 2.0),
@@ -530,9 +551,9 @@ def plot_individual_traces(
 
     # ── 4. Draw rows ─────────────────────────────────────────────────
     for row_idx, (trace_id, sv_dict, row_pattern, row_count) in enumerate(selected):
-        y0        = (n - 1 - row_idx) * (row_h + gap)
-        case      = cases_list[trace_id]   # shape (1, prefix_len, n_features)
-        seg_ids   = sv_dict["segment_ids"]
+        y0 = (n - 1 - row_idx) * (row_h + gap)
+        case = cases_list[trace_id]  # shape (1, prefix_len, n_features)
+        seg_ids = sv_dict["segment_ids"]
         shap_vals = np.asarray(sv_dict["segment_sv"]).ravel()
 
         # Build event → segment colour lookup
@@ -546,28 +567,44 @@ def plot_individual_traces(
         row_trace_len = seg_ids[-1][-1] + 1
         for event_idx in range(row_trace_len):
             color = event_color.get(event_idx, (0.85, 0.85, 0.85, 1.0))
-            ax.add_patch(mpatches.Rectangle(
-                (event_idx * cell_w, y0), cell_w, row_h,
-                facecolor=color, edgecolor="none", linewidth=0, zorder=2,
-            ))
+            ax.add_patch(
+                mpatches.Rectangle(
+                    (event_idx * cell_w, y0),
+                    cell_w,
+                    row_h,
+                    facecolor=color,
+                    edgecolor="none",
+                    linewidth=0,
+                    zorder=2,
+                )
+            )
             act_code = int(case[0, event_idx, 0])
             act_name = activity_lookup.get(act_code, f"#{act_code}")
             r, g, b, _ = color
-            txt_color = "black" if (0.299 * r + 0.587 * g + 0.114 * b) > 0.55 else "white"
+            txt_color = (
+                "black" if (0.299 * r + 0.587 * g + 0.114 * b) > 0.55 else "white"
+            )
             ax.text(
                 event_idx * cell_w + cell_w / 2,
                 y0 + row_h / 2,
                 act_name,
-                ha="center", va="center",
-                fontsize=9, rotation=90,
-                color=txt_color, clip_on=True, zorder=3,
+                ha="center",
+                va="center",
+                fontsize=9,
+                rotation=90,
+                color=txt_color,
+                clip_on=True,
+                zorder=3,
             )
 
         # Segment boundary lines — always positional regardless of pattern_type
         for cp in _change_points(seg_ids):
             ax.plot(
-                [cp * cell_w, cp * cell_w], [y0, y0 + row_h],
-                color="#222222", linewidth=2.0, zorder=4,
+                [cp * cell_w, cp * cell_w],
+                [y0, y0 + row_h],
+                color="#222222",
+                linewidth=2.0,
+                zorder=4,
             )
 
         # Row label
@@ -577,8 +614,12 @@ def plot_individual_traces(
         else:
             label = f"Pattern {row_idx + 1}\n$(n={row_count})$"
         ax.text(
-            -0.5, y0 + row_h / 2, label,
-            ha="right", va="center", fontsize=19,
+            -0.5,
+            y0 + row_h / 2,
+            label,
+            ha="right",
+            va="center",
+            fontsize=19,
             linespacing=1.4,
         )
 
@@ -613,7 +654,10 @@ def plot_individual_traces(
 
 # ── Segment statistics LaTeX table ────────────────────────────────────────────
 
-def print_segment_stats_latex(explicands_info: Dict, top_k: int = 5, output_path: str = "") -> None:
+
+def print_segment_stats_latex(
+    explicands_info: Dict, top_k: int = 5, output_path: str = ""
+) -> None:
     """Save a LaTeX table with segment statistics for each sample (TP/FP/FN/TN).
 
     Rows    : TP, FP, FN, TN
@@ -645,42 +689,51 @@ def print_segment_stats_latex(explicands_info: Dict, top_k: int = 5, output_path
         top_patterns = [pat for pat, _ in pattern_counts.most_common(top_k)]
         total_traces = len(patterns)
         covered_traces = sum(pattern_counts[pat] for pat in top_patterns)
-        coverage_pct = 100.0 * covered_traces / total_traces if total_traces > 0 else 0.0
+        coverage_pct = (
+            100.0 * covered_traces / total_traces if total_traces > 0 else 0.0
+        )
 
         # activity-transition coverage: pattern = activity codes at segment boundaries
         act_patterns = [
-            _activity_change_points(sv, cases_list[i])
-            for i, sv in enumerate(sv_list)
+            _activity_change_points(sv, cases_list[i]) for i, sv in enumerate(sv_list)
         ]
         act_pattern_counts = Counter(act_patterns)
         act_top = [pat for pat, _ in act_pattern_counts.most_common(top_k)]
         act_covered = sum(act_pattern_counts[p] for p in act_top)
-        act_coverage_pct = 100.0 * act_covered / total_traces if total_traces > 0 else 0.0
+        act_coverage_pct = (
+            100.0 * act_covered / total_traces if total_traces > 0 else 0.0
+        )
 
-        table_rows.append((
-            sample.upper(),
-            total_traces,
-            float(np.mean(n_segs_per_trace)),
-            float(np.std(n_segs_per_trace)),
-            float(np.mean(seg_len_per_trace)),
-            float(np.std(seg_len_per_trace)),
-            coverage_pct,
-            act_coverage_pct,
-            len(act_pattern_counts)
-        ))
+        table_rows.append(
+            (
+                sample.upper(),
+                total_traces,
+                float(np.mean(n_segs_per_trace)),
+                float(np.std(n_segs_per_trace)),
+                float(np.mean(seg_len_per_trace)),
+                float(np.std(seg_len_per_trace)),
+                coverage_pct,
+                act_coverage_pct,
+                len(act_pattern_counts),
+            )
+        )
 
     lines = [
         f"% Segment statistics per sample  (top-{top_k} patterns)",
         r"\begin{table}[h]",
         r"\centering",
-        (f"\\caption{{Segment statistics per prediction outcome "
-         f"(top-{top_k} patterns, $\\mu \\pm \\sigma$ across traces)}}"),
+        (
+            f"\\caption{{Segment statistics per prediction outcome "
+            f"(top-{top_k} patterns, $\\mu \\pm \\sigma$ across traces)}}"
+        ),
         r"\begin{tabular}{lccccc}",
         r"\hline",
-        (r"Sample & $N$ & \# segments ($\mu \pm \sigma$) & "
-         r"Seg.\ length ($\mu \pm \sigma$) & "
-         r"Top-$k$ cov.\ pos.\ (\%) & Top-$k$ cov.\ act.\ (\%) & " 
-         r"\# patterns\\"),
+        (
+            r"Sample & $N$ & \# segments ($\mu \pm \sigma$) & "
+            r"Seg.\ length ($\mu \pm \sigma$) & "
+            r"Top-$k$ cov.\ pos.\ (\%) & Top-$k$ cov.\ act.\ (\%) & "
+            r"\# patterns\\"
+        ),
         r"\hline",
     ]
     for sample_name, n, ns_m, ns_s, sl_m, sl_s, cov, act_cov, n_act_pat in table_rows:
@@ -702,9 +755,21 @@ def print_segment_stats_latex(explicands_info: Dict, top_k: int = 5, output_path
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
+
 def main():
+    # ── 2. Load activity vocabulary once ────────────────────────────
+    print("=" * 80)
+    print("Loading model & vocabulary for activity decoding")
+    print("=" * 80)
+    config, _, test_loader, _ = load_data_and_model(config_path, checkpoint_path)
+    ds_name = config["dataset"].lower()
+    raw_stoi: dict = test_loader.dataset.log.stoi["activity"]  # type: ignore[union-attr]
+    activity_lookup: dict = {v: k for k, v in raw_stoi.items()}  # int → activity name
+
     # ── 1. Load saved SHAP explanations per strategy × cohort ───────
     explicands_per_strategy: Dict[str, Dict[str, Dict]] = {}
+
+    sv_output_dir = osp.join(OUTPUT_ROOT, "shap_values", ds_name)
 
     for strategy in SEG_STRATEGIES:
         explicands_per_strategy[strategy] = {}
@@ -717,16 +782,8 @@ def main():
                 with open(pkl_path, "rb") as f:
                     explicands_per_strategy[strategy][cohort][name] = pickle.load(f)
 
-    # ── 2. Load activity vocabulary once ────────────────────────────
-    print("=" * 80)
-    print("Loading model & vocabulary for activity decoding")
-    print("=" * 80)
-    _, _, test_loader, _ = load_data_and_model(config_path, checkpoint_path)
-    raw_stoi: dict = test_loader.dataset.log.stoi["activity"]  # type: ignore[union-attr]
-    activity_lookup: dict = {v: k for k, v in raw_stoi.items()}  # int → activity name
-
     # ── 3. Individual-trace strip charts ────────────────────────────
-    vis_dir = osp.join(OUTPUT_ROOT, "figures", "bpi17", "sv_patterns", "seg_comparison")
+    vis_dir = osp.join(OUTPUT_ROOT, "figures", ds_name, "sv_patterns", "seg_comparison")
     os.makedirs(vis_dir, exist_ok=True)
 
     cohort = COHORT_ORDER[0]
@@ -749,8 +806,16 @@ def main():
                     f"{cohort}_{strategy}_individual_traces_{sample}_{pattern_type}.png",
                 ),
             )
+        print_segment_stats_latex(
+            explicands_per_strategy[strategy][cohort],
+            top_k=10,
+            output_path=osp.join(
+                sv_output_dir,
+                f"{strategy}_cohort_{cohort}",
+                f"{ds_name}_{}_seg_stats.tex",
+            ),
+        )
 
 
 if __name__ == "__main__":
     main()
-

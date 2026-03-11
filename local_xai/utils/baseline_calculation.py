@@ -20,7 +20,8 @@ def build_average_event_baseline(
     """
     np.random.seed(RANDOM_SEED)
 
-    bc_indices = np.random.randint(0, 1000, size=bg_sample_size).tolist()
+    start, stop = 0, len(train_loader) - 1
+    bc_indices = np.random.randint(start, stop, size=bg_sample_size).tolist()
 
     bc_data = []
     for i in bc_indices:
