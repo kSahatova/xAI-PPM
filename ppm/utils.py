@@ -767,11 +767,14 @@ def calculate_auc(model, dataloader, device):
                 y_num.to(device),
             )
 
-            true_labels.append(y_cat[0, -1,  :])
             attention_mask = (x_cat[..., 0] != 0).long()
 
             out, _ = model(x_cat=x_cat, x_num=x_num, attention_mask=attention_mask)
-            predictions.append(out[0, -1, :])
+            
+            y_true = y_cat.squeeze(-1)[attention_mask.bool()].to(torch.float).cpu().numpy()
+            y_pred = out.squeeze(-1)[attention_mask.bool()].cpu().numpy()
+            true_labels.extend(y_true)
+            predictions.extend(y_pred)
 
     auc =  roc_auc_score(true_labels, predictions)
     print("AUC of the model: {:.3%}".format(auc))

@@ -82,7 +82,7 @@ PRETRAINED_CONFIGS = {
 def main(training_config: dict):
     name, version = training_config["log"].split("_")
     log = getattr(bpi, name)(
-        cache_folder=r"D:\PycharmProjects\xAI-PPM\data"
+        cache_folder=r"data/"# D:\PycharmProjects\xAI-PPM\data"
     )
 
     # ToDo: are we using the 5 versions or just one?
@@ -232,6 +232,12 @@ def main(training_config: dict):
         persist_model=persist_model,
     )
     print("=" * 80)
+
+    # from ppm.utils import calculate_auc
+
+    # # calculate_auc(model, train_loader, device=training_config["device"])
+    # calculate_auc(model, test_loader, device=training_config["device"])
+    
 
     if use_wandb and WANDB_AVAILABLE:
         wandb.finish()
