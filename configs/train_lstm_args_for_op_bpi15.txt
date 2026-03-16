@@ -1,4 +1,4 @@
---dataset=BPI15
+--dataset=BPI15_1
 --categorical_targets=outcome
 --project_name=train_lstm_bpic2015
 --device=cpu
