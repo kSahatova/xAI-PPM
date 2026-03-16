@@ -150,8 +150,9 @@ def get_ER_normalized(variant_log, activity_counts, edge_counts):
     """
     ER_sum = 0.0
     total_occurences = 0
+    ER_list = []
     for variant, occurrence in variant_log.items():
-        # Calculate the replay probability of the trace with the real dfg 
+        # Calculate the replay probability of the trace with the real dfg
         prob = get_probability(activity_counts, edge_counts, variant)
         # Get a new dfg, which is only discovered using the varint, used for normalization
         act_counts_var, edge_count_var = get_dfg({variant:1})
@@ -159,42 +160,45 @@ def get_ER_normalized(variant_log, activity_counts, edge_counts):
         maximal_prob = get_probability(act_counts_var, edge_count_var, variant)
         # Get normalized probability, subtracting the minimal ER at the end (obtained with maximal probability) would be the same
         prob_norm = prob/maximal_prob
-        
-        ER_sum += (-math.log(prob_norm, 2))*occurrence
+
+        er_trace = -math.log(prob_norm, 2)
+        ER_sum += er_trace * occurrence
         total_occurences += occurrence
-    ER = ER_sum/total_occurences
-    return ER
+        ER_list.extend([er_trace] * occurrence)
+
+    ER = ER_sum / total_occurences
+
+    variance = sum((er - ER) ** 2 for er in ER_list) / total_occurences
+    ER_std = math.sqrt(variance)
+
+    return ER, ER_std
 
 
-def compute_er_full(cases:  List, normalized: bool=True) -> float:
-    er = 0.0
+def compute_er_full(cases:  List, normalized: bool=True):
     full_variant_log = defaultdict(int)
 
     for case in cases:
         full_trace = tuple(case[0, :, 0].astype(int).tolist())
         full_variant_log[full_trace] += 1
-    
+
     act_full, edge_full = get_dfg(dict(full_variant_log))
-    er_fn = get_ER_normalized if normalized else get_ER
-    er = er_fn(dict(full_variant_log), act_full, edge_full)
+    if normalized:
+        return get_ER_normalized(dict(full_variant_log), act_full, edge_full)
+    return get_ER(dict(full_variant_log), act_full, edge_full)
 
-    return  er
 
-
-def compute_er_segments(segmented_cases:  List[List[List[float]]], normalized: bool=True) -> float:
-    er = 0.0
+def compute_er_segments(segmented_cases:  List[List[List[float]]], normalized: bool=True):
     seg_variant_log = defaultdict(int)
 
     for case in segmented_cases:
         for seg in case:
             seg = tuple(map(int, seg))
             seg_variant_log[seg] += 1
-    
-    act, edge = get_dfg(dict(seg_variant_log))
-    er_fn = get_ER_normalized if normalized else get_ER
-    er = er_fn(dict(seg_variant_log), act, edge)
 
-    return  er
+    act, edge = get_dfg(dict(seg_variant_log))
+    if normalized:
+        return get_ER_normalized(dict(seg_variant_log), act, edge)
+    return get_ER(dict(seg_variant_log), act, edge)
 
 
 def compute_er_full_and_segments(sv_list, cases_list, normalized=True):
@@ -243,8 +247,11 @@ def compute_er_full_and_segments(sv_list, cases_list, normalized=True):
     act_full, edge_full = get_dfg(dict(full_variant_log))
     act_seg, edge_seg = get_dfg(dict(segment_variant_log))
 
-    er_fn = get_ER_normalized if normalized else get_ER
-    er_full = er_fn(dict(full_variant_log), act_full, edge_full)
-    er_seg = er_fn(dict(segment_variant_log), act_seg, edge_seg)
+    if normalized:
+        er_full = get_ER_normalized(dict(full_variant_log), act_full, edge_full)
+        er_seg = get_ER_normalized(dict(segment_variant_log), act_seg, edge_seg)
+    else:
+        er_full = get_ER(dict(full_variant_log), act_full, edge_full)
+        er_seg = get_ER(dict(segment_variant_log), act_seg, edge_seg)
 
     return er_full, er_seg

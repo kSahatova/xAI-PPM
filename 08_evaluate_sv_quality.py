@@ -26,11 +26,17 @@ from timeshap.wrappers.outcome_predictor_wrapper import OutcomePredictorWrapper
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-SEG_STRATEGIES = ["per_event", "random", "distribution", "transition"]
-RANDOM_SEEDS = [6, 32, 42, 105]
+SEG_STRATEGIES = ["per_event", "distribution", "transition"]
+RANDOM_SEEDS = [0]
+# RANDOM_SEEDS = [6, 32, 42, 105]
 COHORT_ORDER = ["medium"]
 SAMPLE_NAMES = ["tp", "fp", "fn", "tn"]
 TOP_N_PATTERNS = 10
+AVERAGE_CP_NUM = 8
+# When True, per-event monotonicity is re-grouped by transition-based change
+# points before evaluation ("grouped_mono").  When False, each event is its
+# own segment ("mono").
+USE_GROUPED_MONO_FOR_PER_EVENT = False
 
 PROJECT_DIR = r"D:\PycharmProjects\xAI-PPM"
 OUTPUT_ROOT = osp.join(PROJECT_DIR, r"outputs")
@@ -47,12 +53,12 @@ SAMPLE_META = {
 }
 
 
-_ROW_ORDER = ["predicted_positive", "predicted_negative"]  # "tp", "fp", "fn", "tn",
+_ROW_ORDER = ["tp", "fp", "fn", "tn", "predicted_positive", "predicted_negative"]
 _ROW_LABELS = {
-    # "tp": "TP (cancelled, correct)",
-    # "fp": "FP (accepted, wrong)",
-    # "fn": "FN (cancelled, wrong)",
-    # "tn": "TN (accepted, correct)",
+    "tp": "TP (cancelled, correct)",
+    "fp": "FP (accepted, wrong)",
+    "fn": "FN (cancelled, wrong)",
+    "tn": "TN (accepted, correct)",
     "predicted_positive": "Predicted positive",
     "predicted_negative": "Predicted negative",
 }
@@ -65,7 +71,6 @@ _STRATEGY_LABELS = {
 
 
 # ── RPCi / RPCu ─────────────────────────────────────────────────────────────────
-
 
 def _perturb_segments(
     case: np.ndarray,
@@ -625,22 +630,6 @@ def save_rpc_latex_table(
     for results in results_per_strategy.values():
         cohorts.update(results.keys())
 
-    def _pooled_stat(group_metrics: List[Dict], key: str) -> Tuple[float, float]:
-        """Pooled mean and std of *key* / *key*_std across multiple groups."""
-        std_key = f"{key}_std"
-        total_n = sum(m["n"] for m in group_metrics)
-        if total_n == 0:
-            return 0.0, 0.0
-        pooled_mean = sum(m[key] * m["n"] for m in group_metrics) / total_n
-        pooled_var = (
-            sum(
-                m["n"] * (m[std_key] ** 2 + (m[key] - pooled_mean) ** 2)
-                for m in group_metrics
-            )
-            / total_n
-        )
-        return pooled_mean, float(np.sqrt(max(pooled_var, 0.0)))
-
     # Detect whether any strategy has pos_mono / grouped_mono results
     def _any_key(key):
         return any(
@@ -653,12 +642,12 @@ def save_rpc_latex_table(
         )
 
     has_pos_mono = _any_key("pos_mono")
-    n_cols = 3 + int(has_pos_mono) + 1  # label + RPCi + RPCu + optional cols + k
+    n_cols = 3 + int(has_pos_mono) + 1  # label + RPCi + RPCu + optional pos_mono + k
     col_spec = "l" + " c" * (n_cols - 1)
 
     for cohort in sorted(cohorts):
         header = (
-            r"\textbf{Predicted class}"
+            r"\textbf{Sample}"
             r" & $\mathrm{RPCI}$"
             r" & $\mathrm{RPCU}$"
         )
@@ -682,28 +671,17 @@ def save_rpc_latex_table(
                 rf"\multicolumn{{{n_cols}}}{{l}}{{\mathrm{{{strategy_label}}}}} \\ \midrule"
             )
 
-            # Determine which groups are present and collect rows per k
+            # Split groups: individual samples vs aggregated predicted classes
             present_groups = [g for g in _ROW_ORDER if g in cohort_data]
-            n_groups = len(present_groups)
+            sample_groups = [g for g in present_groups if g in SAMPLE_NAMES]
+            class_groups = [g for g in present_groups if g not in SAMPLE_NAMES]
 
             # Gather all k values
             k_vals = sorted({k for g in present_groups for k in cohort_data[g]})
 
             for k in k_vals:
-                group_metrics_for_k = [
-                    cohort_data[g][k] for g in present_groups if k in cohort_data[g]
-                ]
-                # Positive relevance mono: only present when metrics have the key
-                pm_cell = ""
-                if has_pos_mono:
-                    pm_metrics = [m for m in group_metrics_for_k if "pos_mono" in m]
-                    if pm_metrics:
-                        pm_mean, pm_std = _pooled_stat(pm_metrics, "pos_mono")
-                        pm_cell = (
-                            rf"\multirow{{{n_groups}}}{{*}}{{${pm_mean:.3f} \pm {pm_std:.3f}$}}"
-                        )
-
-                for row_idx, group in enumerate(present_groups):
+                # ── Individual sample rows (tp / fp / fn / tn) ──
+                for group in sample_groups:
                     if k not in cohort_data[group]:
                         continue
                     m = cohort_data[group][k]
@@ -712,7 +690,33 @@ def save_rpc_latex_table(
                     rpc_u = f"{m['rpc_u']:.3f} $\\pm$ {m['rpc_u_std']:.3f}"
                     row = rf"{label} & {rpc_i} & {rpc_u}"
                     if has_pos_mono:
-                        row += f" & {pm_cell if row_idx == 0 else ''}"
+                        pm_cell = (
+                            f"${m['pos_mono']:.3f} \\pm {m.get('pos_mono_std', 0.0):.3f}$"
+                            if "pos_mono" in m else "---"
+                        )
+                        row += f" & {pm_cell}"
+                    row += rf" & {k} \\"
+                    lines.append(row)
+
+                # ── Separator before aggregated class rows ──
+                if sample_groups and class_groups:
+                    lines.append(r"\midrule")
+
+                # ── Aggregated predicted-class rows ──
+                for group in class_groups:
+                    if k not in cohort_data[group]:
+                        continue
+                    m = cohort_data[group][k]
+                    label = _ROW_LABELS.get(group, group.upper())
+                    rpc_i = f"{m['rpc_i']:.3f} $\\pm$ {m['rpc_i_std']:.3f}"
+                    rpc_u = f"{m['rpc_u']:.3f} $\\pm$ {m['rpc_u_std']:.3f}"
+                    row = rf"{label} & {rpc_i} & {rpc_u}"
+                    if has_pos_mono:
+                        pm_cell = (
+                            f"${m['pos_mono']:.3f} \\pm {m.get('pos_mono_std', 0.0):.3f}$"
+                            if "pos_mono" in m else "---"
+                        )
+                        row += f" & {pm_cell}"
                     row += rf" & {k} \\"
                     lines.append(row)
 
@@ -736,66 +740,56 @@ def save_rpc_latex_table(
     return tex
 
 
-def print_rpc_table(results: Dict) -> None:
-    # Pre-compute combined pos_mono per (cohort, k) pooled across both predicted classes
-    combined_pos_mono: Dict[Tuple, Tuple] = {}
-    for cohort, samples in results.items():
-        pred_groups = ["predicted_positive", "predicted_negative"]
-        k_vals: set = set()
-        for g in pred_groups:
-            if g in samples:
-                k_vals.update(samples[g].keys())
-        for k in k_vals:
-            group_metrics = [
-                samples[g][k] for g in pred_groups
-                if g in samples and k in samples[g] and "pos_mono" in samples[g][k]
-            ]
-            if not group_metrics:
-                continue
-            total_n = sum(m["n"] for m in group_metrics)
-            pooled_mean = sum(m["pos_mono"] * m["n"] for m in group_metrics) / total_n
-            pooled_var = (
-                sum(
-                    m["n"] * (m["pos_mono_std"] ** 2 + (m["pos_mono"] - pooled_mean) ** 2)
-                    for m in group_metrics
-                )
-                / total_n
-            )
-            combined_pos_mono[(cohort, k)] = (
-                round(pooled_mean, 4),
-                round(float(np.sqrt(max(pooled_var, 0.0))), 4),
-            )
+def print_rpc_table(results: Dict, output_path: str = "", mono_key: "str | None" = None) -> None:
+    """Print (and optionally save) an RPC results table.
+
+    Parameters
+    ----------
+    results : return value of evaluate_rpc / aggregate_random_results
+    output_path : if non-empty, write the table to this CSV path
+    mono_key : optional key from the metric dict to include as a "Mono" column,
+        e.g. ``"mono"`` (ungrouped) or ``"grouped_mono"`` (grouped per-event).
+        When None no additional mono column is added.
+    """
+    mono_label = (
+        "Grouped Mono" if mono_key == "grouped_mono" else "Mono"
+    ) if mono_key else None
 
     rows = []
     for cohort, samples in results.items():
         for name, k_dict in samples.items():
             for k, m in k_dict.items():
-                # For individual samples (tp/fp/fn/tn) use their own pos_mono;
-                # for aggregated classes use the combined pooled value.
-                if name in SAMPLE_NAMES and "pos_mono" in m:
-                    pm = (round(m["pos_mono"], 4), round(m.get("pos_mono_std", 0.0), 4))
-                else:
-                    pm = combined_pos_mono.get((cohort, k))
-                rows.append(
-                    {
-                        "cohort": cohort,
-                        "sample": name.upper(),
-                        "k": k,
-                        "RPCi (mean)": round(m["rpc_i"], 4),
-                        "RPCi (std)": round(m["rpc_i_std"], 4),
-                        "RPCu (mean)": round(m["rpc_u"], 4),
-                        "RPCu (std)": round(m["rpc_u_std"], 4),
-                        "Pos Mono (mean)": pm[0] if pm else None,
-                        "Pos Mono (std)": pm[1] if pm else None,
-                        "n": m["n"],
-                    }
-                )
+                pm_mean = round(m["pos_mono"], 4) if "pos_mono" in m else None
+                pm_std = round(m.get("pos_mono_std", 0.0), 4) if "pos_mono" in m else None
+                row = {
+                    "cohort": cohort,
+                    "sample": name.upper(),
+                    "k": k,
+                    "RPCi (mean)": round(m["rpc_i"], 4),
+                    "RPCi (std)": round(m["rpc_i_std"], 4),
+                    "RPCu (mean)": round(m["rpc_u"], 4),
+                    "RPCu (std)": round(m["rpc_u_std"], 4),
+                    "Pos Mono (mean)": pm_mean,
+                    "Pos Mono (std)": pm_std,
+                    "n": m["n"],
+                }
+                if mono_key is not None:
+                    mono_mean = round(m[mono_key], 4) if mono_key in m else None
+                    mono_std = round(m.get(f"{mono_key}_std", 0.0), 4) if mono_key in m else None
+                    row[f"{mono_label} (mean)"] = mono_mean
+                    row[f"{mono_label} (std)"] = mono_std
+                rows.append(row)
 
-    print(pd.DataFrame(rows).to_string(index=False))
+    df = pd.DataFrame(rows)
+    print(df.to_string(index=False))
+
+    if output_path:
+        os.makedirs(osp.dirname(output_path), exist_ok=True)
+        df.to_csv(output_path, index=False)
+        print(f"Saved table → {output_path}")
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
-
 
 def aggregate_random_results(results_per_seed: List[Dict]) -> Dict:
     """Average evaluate_rpc metric dicts across multiple random seeds.
@@ -943,7 +937,7 @@ def main():
             k_values_per_cohort=k_per_cohort,
             n_workers=9,
             ref_explicands_info=ref_info,
-            compute_mono=False
+            compute_mono=(strategy == "per_event"),
         )
 
     # ── Random strategy: evaluate per seed, then aggregate ──────────
@@ -972,22 +966,22 @@ def main():
     rpc_per_strategy["random"] = aggregate_random_results(seed_results)
 
     # ── 4. Report ────────────────────────────────────────────────────
-    report_order = ["per_event", "random", "distribution", "transition"]
+    report_order = ["per_event", "distribution", "transition"]
     for strategy in report_order:
         if strategy not in rpc_per_strategy:
             continue
         print(f"\n--- RPCi / RPCu results [{strategy}] (avg_event baseline) ---")
-        print_rpc_table(rpc_per_strategy[strategy])
+        csv_path = osp.join(sv_output_dir, f"rpc_table_{strategy}.csv")
+        mono_key = (
+            ("grouped_mono" if USE_GROUPED_MONO_FOR_PER_EVENT else "mono")
+            if strategy == "per_event"
+            else None
+        )
+        print_rpc_table(rpc_per_strategy[strategy], output_path=csv_path, mono_key=mono_key)
 
     ordered_rpc = {s: rpc_per_strategy[s] for s in report_order if s in rpc_per_strategy}
     tex_path = osp.join(OUTPUT_ROOT, "shap_values", "bpi17", "rpc_table.tex")
     save_rpc_latex_table(ordered_rpc, output_path=tex_path)
-
-    # ── 5. Persist ───────────────────────────────────────────────────
-    # out_path = osp.join(sv_output_dir, "rpci_rpcu_results_avg_pert_strategy.pkl")
-    # with open(out_path, "wb") as f:
-    #     pickle.dump(rpc_per_strategy, f)
-    # print(f"\nSaved to {out_path}")
 
 
 if __name__ == "__main__":

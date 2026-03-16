@@ -54,7 +54,8 @@ SAMPLE_META = {
     "tn": dict(label="TN\n(accepted, correct)", color="#3E8540B6"),
 }
 
-SEG_STRATEGIES = ["per_event", "distribution", "transition"]
+# SEG_STRATEGIES = ["random", ]
+SEG_STRATEGIES = ["per_event","random", "distribution", "transition"]
 
 COHORT_ORDER = ["medium"]
 # COHORT_ORDER = ["short", "medium", "long"]
@@ -301,7 +302,6 @@ def plot_individual_traces(
 
 # ── Segment statistics LaTeX table ────────────────────────────────────────────
 
-
 def print_segment_stats_latex(
     explicands_info: Dict, top_k: int = 5, output_path: str = ""
 ) -> None:
@@ -433,45 +433,46 @@ def main():
     print("\n" + "=" * 80)
     print("Entropic Relevance (normalised) — full traces vs. segments")
     print("-" * 80)
-    strategy = "transition"
+    # strategy = "transition"
 
-    all_cases = []
-    for _, item in explicands_per_strategy[strategy]['medium'].items():
-        all_cases.extend(item['cases'])
-    full_log_er = compute_er_full(all_cases)
-    print("Full log normalized ER: ", full_log_er)
+    # all_cases = []
+    # for _, item in explicands_per_strategy[strategy]['medium'].items():
+    #     all_cases.extend(item['cases'])
+    # full_log_er, full_log_er_std = compute_er_full(all_cases)
+    # print(f"Full log normalized ER: {full_log_er} ({full_log_er_std})")
 
 
-    for strategy, cohort_data in explicands_per_strategy.items():
+    # for strategy, cohort_data in explicands_per_strategy.items():
         
-        case_segments = []
+    #     case_segments = []
         
-        for _, sample_data in cohort_data.items():
-            for sample in SAMPLE_NAMES:
-                segments_info = sample_data[sample]['segments']
-                segments = [item['segments'] for item in segments_info]
-                case_segments.extend(segments)
+    #     for _, sample_data in cohort_data.items():
+    #         for sample in SAMPLE_NAMES:
+    #             segments_info = sample_data[sample]['segments']
+    #             segments = [item['segments'] for item in segments_info]
+    #             case_segments.extend(segments)
 
-        print(
-            f"Normalized ER for segmentation '{strategy}':", compute_er_segments(case_segments) 
-        )
+    #     seg_er, seg_er_std = compute_er_segments(case_segments) 
+    #     print(
+    #         f"Normalized ER for segmentation '{strategy}': {seg_er}, ({seg_er_std})", 
+    #     )
 
-    print(f"{'Strategy':<14} {'Sample':<8} {'ER full':>10} {'ER segs':>10}")
-    for cohort, sample_data in explicands_per_strategy[strategy].items():
+    # print(f"{'Strategy':<14} {'Sample':<8} {'ER full':>10} {'ER segs':>10}")
+    # for cohort, sample_data in explicands_per_strategy[strategy].items():
 
-        for sample in SAMPLE_NAMES:
-            info = sample_data.get(sample, {})
-            sv_list = info.get("sv", [])
-            cases_list = info.get("cases", [])
-            if not sv_list:
-                continue
-            er_full, er_seg = compute_er_full_and_segments(
-                sv_list, cases_list, normalized=True
-            )
-            print(
-                f"{strategy:<14} {sample.upper():<8} {er_full:>10.4f} {er_seg:>10.4f}"
-            )
-    print("=" * 80 + "\n")
+    #     for sample in SAMPLE_NAMES:
+    #         info = sample_data.get(sample, {})
+    #         sv_list = info.get("sv", [])
+    #         cases_list = info.get("cases", [])
+    #         if not sv_list:
+    #             continue
+    #         er_full, er_seg = compute_er_full_and_segments(
+    #             sv_list, cases_list, normalized=True
+    #         )
+    #         print(
+    #             f"{strategy:<14} {sample.upper():<8} {er_full:>10.4f} {er_seg:>10.4f}"
+    #         )
+    # print("=" * 80 + "\n")
 
     # ── 3. Individual-trace strip charts ────────────────────────────
     vis_dir = osp.join(OUTPUT_ROOT, "figures", ds_name, "sv_patterns", "seg_comparison")
@@ -490,7 +491,7 @@ def main():
                 activity_lookup,
                 sample=sample,
                 cohort=cohort,
-                n_cases=1,
+                n_cases=2,
                 pattern_type=pattern_type,
                 output_path=osp.join(
                     vis_dir,

@@ -37,11 +37,11 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional
 
+import random
 import numpy as np
 import pandas as pd
 
 from .transition_based import segment_trace
-
 
 # ── Public types ────────────────────────────────────────────────────
 SegmentResult = Dict[str, List[List]]
@@ -245,9 +245,9 @@ def _make_random_segmenter(
 ) -> Segmenter:
     ncp = num_change_points
     mcp = min_change_points
-    s = seed
 
     def _segment(trace: np.ndarray) -> SegmentResult:
+        s = random.randint(1, 1000)
         seq = _to_list(trace)
         n = len(seq)
         if n == 0:

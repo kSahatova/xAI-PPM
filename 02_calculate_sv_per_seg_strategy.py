@@ -35,7 +35,7 @@ from timeshap.wrappers.outcome_predictor_wrapper import OutcomePredictorWrapper
 SAMPLE_NAMES = ["tp", "fp", "fn", "tn"]
 
 SEG_STRATEGIES = ["random"]
-# SEG_STRATEGIES = ["per_event", "distribution", "transition"]
+# SEG_STRATEGIES = ["per_event", "random", "distribution", "transition"]
 PREFIX_LEN = 30
 # PREFIX_LEN = 15
 MODEL_CONFIDENCE_THRESHOLD = 0.7
@@ -132,18 +132,17 @@ def main():
         "transition": {"transition_matrix": transition_matrix},
         "distribution": {
             "min_window_size": 3,
-            "max_window_size": 3,
+            "max_window_size": 5,
             "m": 5,  # measuring window,
             "timestamp": test_loader.dataset.timestamps,
         },
         "per_event": {},
-        "random": {"num_change_points": 8, "seed": 32},
+        "random": {"num_change_points": 8},
     }
 
     for seg_strategy in SEG_STRATEGIES:
-        random_seed =  seg_strategy_kwargs['random']['seed']
         sv_output_dir = osp.join(
-            OUTPUT_ROOT, "shap_values", ds_name, f"{seg_strategy}_cohort_medium_seed{random_seed}"
+            OUTPUT_ROOT, "shap_values", ds_name, f"{seg_strategy}_cohort_medium"
         )
 
         for name in SAMPLE_NAMES:

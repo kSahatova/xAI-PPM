@@ -1,3 +1,4 @@
+from functools import cache
 from typing import OrderedDict, Tuple, Optional
 
 import torch
@@ -228,7 +229,8 @@ def load_data_and_model(config_path: str, checkpoint_path: str):
         else config["continuous_features"]
     )
 
-    log = getattr(event_logs, config["dataset"])()
+    # TODO: remove this monkey patch (cache_folder)
+    log = getattr(event_logs, config["dataset"])(cache_folder=r'D:\PycharmProjects\xAI-PPM\data')
     column_schema = getattr(DatasetSchemas, config["dataset"])()
     if config["dataset"] == "BPI17":
         labeled_df = add_outcome_labels(log.dataframe, column_schema, LABELS_DICT)
@@ -252,7 +254,7 @@ def load_data_and_model(config_path: str, checkpoint_path: str):
         )
 
     unbiased_split_kwargs = (
-        log.unbiased_split_params if log._unbiased_split_params is not None else {}
+        log.unbiased_split_params if log.unbiased_split_params is not None else {}
     )
     train_loader, test_loader = setup_dataloaders(
         config, labeled_df, unbiased_split_kwargs
