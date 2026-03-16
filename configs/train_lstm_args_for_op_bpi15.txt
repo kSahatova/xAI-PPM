@@ -1,12 +1,12 @@
---dataset=Sepsis
+--dataset=BPI15
 --categorical_targets=outcome
---project_name=train_lstm_bpic2017
+--project_name=train_lstm_bpic2015
 --device=cpu
 --persist_model
 --backbone=rnn
 --rnn_type=lstm
 --hidden_size=64
---embedding_size=64
+--embedding_size=32
 --lr=1e-4  
 --n_layers=1 
 --batch_size=64 

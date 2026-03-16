@@ -16,7 +16,13 @@ from skpm.event_logs import BPI17, Sepsis
 from ppm.engine.op import train_engine
 from ppm.models import OutcomePredictor
 
-from ppm.utils import parse_args, add_outcome_labels, prepare_data, get_model_config, prepare_sepsis_data
+from ppm.utils import (
+    parse_args,
+    add_outcome_labels,
+    prepare_data,
+    get_model_config,
+    prepare_sepsis_data,
+)
 
 
 RANDOM_SEED = 42
@@ -75,21 +81,27 @@ PRETRAINED_CONFIGS = {
 
 EVENT_LOGS = {"BPI17": BPI17, "Sepsis": Sepsis}
 
+
 def extract_timestamp_features(group):
     """extract the time since the last event in minutes"""
-    group = group.sort_values("time:timestamp", ascending=False, kind='mergesort')
-    
+    group = group.sort_values("time:timestamp", ascending=False, kind="mergesort")
+
     tmp = group["time:timestamp"] - group["time:timestamp"].shift(-1)
     tmp = tmp.fillna(pd.Timedelta(0))
-    group["timesincelastevent"] = tmp.apply(lambda x: float(x / np.timedelta64(1, 'm'))) # m is for minutes
-    group = group.sort_values("time:timestamp", ascending=True, kind='mergesort')
+    group["timesincelastevent"] = tmp.apply(
+        lambda x: float(x / np.timedelta64(1, "m"))
+    )  # m is for minutes
+    group = group.sort_values("time:timestamp", ascending=True, kind="mergesort")
     return group
+
 
 def check_if_activity_exists_and_time_less_than(group, activity):
     relevant_activity_idxs = np.where(group["concept:name"] == activity)[0]
     if len(relevant_activity_idxs) > 0:
         idx = relevant_activity_idxs[0]
-        if group["timesincelastevent"].iloc[idx] <= 28 * 1440: # return in less than 28 days
+        if (
+            group["timesincelastevent"].iloc[idx] <= 28 * 1440
+        ):  # return in less than 28 days
             group["outcome"] = 1
             return group[:idx]
         else:
@@ -99,8 +111,9 @@ def check_if_activity_exists_and_time_less_than(group, activity):
         group["outcome"] = 0
         return group
 
+
 def main(training_config: dict):
-    log = EVENT_LOGS[training_config["log"]](cache_folder="data/")
+    log = EVENT_LOGS[training_config["log"]]()
 
     column_schema = getattr(DatasetSchemas, training_config["log"])()
 
@@ -109,10 +122,20 @@ def main(training_config: dict):
     # labeled_df["outcome"] = labeled_df["case:concept:name"].apply(
     #     lambda x: 0 if "Return ER" in log.dataframe[log.dataframe["case:concept:name"] == x]["concept:name"].values else 1
     # )
-    labeled_df = labeled_df.groupby("case:concept:name").apply(extract_timestamp_features).reset_index(level=0)
-    labeled_df = labeled_df.groupby("case:concept:name").apply(
-        lambda group: check_if_activity_exists_and_time_less_than(group, "Return ER")
-    ).reset_index(level=0)
+    labeled_df = (
+        labeled_df.groupby("case:concept:name")
+        .apply(extract_timestamp_features)
+        .reset_index(drop=True)
+    )
+    labeled_df = (
+        labeled_df.groupby("case:concept:name")
+        .apply(
+            lambda group: check_if_activity_exists_and_time_less_than(
+                group, "Return ER"
+            )
+        )
+        .reset_index(drop=True)
+    )
 
     result = prepare_sepsis_data(
         labeled_df,
@@ -300,9 +323,8 @@ if __name__ == "__main__":
         "strategy": args.strategy,
         "pos_encoding_form": args.pos_encoding_form,
         "pos_encoding_strategy": args.pos_encoding_strategy,
-        'checkpoint_dir': args.checkpoint_dir
+        "checkpoint_dir": args.checkpoint_dir,
     }
-
 
     pprint.pprint(training_config)
     print("=" * 80)

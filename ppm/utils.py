@@ -97,6 +97,32 @@ def fetch_experiments(project="cosmo-v4"):
     return experiments
 
 
+def extract_timestamp_features(group):
+    """extract the time since the last event in minutes"""
+    group = group.sort_values("time:timestamp", ascending=False, kind='mergesort')
+    
+    tmp = group["time:timestamp"] - group["time:timestamp"].shift(-1)
+    tmp = tmp.fillna(pd.Timedelta(0))
+    group["timesincelastevent"] = tmp.apply(lambda x: float(x / np.timedelta64(1, 'm'))) # m is for minutes
+    group = group.sort_values("time:timestamp", ascending=True, kind='mergesort')
+    return group
+
+
+def check_if_activity_exists_and_time_less_than(group, activity):
+    relevant_activity_idxs = np.where(group["concept:name"] == activity)[0]
+    if len(relevant_activity_idxs) > 0:
+        idx = relevant_activity_idxs[0]
+        if group["timesincelastevent"].iloc[idx] <= 28 * 1440: # return in less than 28 days
+            group["outcome"] = 1
+            return group[:idx]
+        else:
+            group["outcome"] = 0
+            return group[:idx]
+    else:
+        group["outcome"] = 0
+        return group
+    
+
 def parse_args(config_path: str = ""):
     parser = argparse.ArgumentParser(fromfile_prefix_chars="@")
     parser.add_argument("--dataset", type=str, default="BPI17")
@@ -285,6 +311,7 @@ def prepare_data(
         return train, test, train_timestamps, test_timestamps
 
     return train, test
+
 
 def prepare_sepsis_data(
     df: pd.DataFrame,

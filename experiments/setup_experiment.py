@@ -19,6 +19,8 @@ from ppm.utils import (
     get_model_config,
     parse_args,
     add_outcome_labels,
+    extract_timestamp_features,
+    check_if_activity_exists_and_time_less_than,
 )
 
 
@@ -39,34 +41,32 @@ NUMERICAL_FEATURES = [
 ]
 
 
-def setup_dataloaders(config: dict, log: pd.DataFrame, unbiased_split_params: Optional[dict]):
-    
+def setup_dataloaders(
+    config: dict, log: pd.DataFrame, unbiased_split_params: Optional[dict]
+):
     train_timestamps, test_timestamps = None, None
-    
+
     if config["dataset"] == "BPI17":
         result = prepare_data(
             log,
             unbiased_split_params,
             NUMERICAL_FEATURES,
             include_labels=True,
-            return_timestamps=True
+            return_timestamps=True,
         )
         # prepare_data may return either (train, test) or (train, test, train_timestamps, test_timestamps)
-        
+
     elif config["dataset"] == "synthetic":
         result = prepare_simbank_data(log, NUMERICAL_FEATURES)
-    elif config["dataset"]  == "Sepsis":
-        result =  prepare_sepsis_data(
-                        log,
-                        NUMERICAL_FEATURES,
-                        include_labels=True,
-                        return_timestamps=True
-                    )
+    elif config["dataset"] == "Sepsis":
+        result = prepare_sepsis_data(
+            log, NUMERICAL_FEATURES, include_labels=True, return_timestamps=True
+        )
     else:
         raise ValueError(
             f"The data preprocessing function has not been implemented for the log {config['log']}"
         )
-    
+
     if isinstance(result, tuple) and len(result) == 4:
         train, test, train_timestamps, test_timestamps = result
     elif isinstance(result, tuple) and len(result) == 2:
@@ -164,8 +164,9 @@ def setup_model(
     return model
 
 
-def create_loader_from_dataframe(df: pd.DataFrame, config: dict, cf_vocab: Tuple[OrderedDict, OrderedDict]):
-    
+def create_loader_from_dataframe(
+    df: pd.DataFrame, config: dict, cf_vocab: Tuple[OrderedDict, OrderedDict]
+):
     event_features = EventFeatures(
         categorical=config["categorical_features"],
         numerical=config["continuous_features"],
@@ -188,7 +189,7 @@ def create_loader_from_dataframe(df: pd.DataFrame, config: dict, cf_vocab: Tuple
     dataset = ContinuousTraces(
         log=event_log,
         refresh_cache=True,
-        device=config['device'],
+        device=config["device"],
     )
 
     data_loader = DataLoader(
@@ -220,7 +221,7 @@ def load_data_and_model(config_path: str, checkpoint_path: str):
         LABELS_DICT = {"O_Accepted": 0, "O_Cancelled": 1, "O_Refused": 2}
     elif config["dataset"] == "Sepsis":
         LABELS_DICT = {"Return ER": 0, "No Return ER": 1}
-    
+
     config["continuous_features"] = (
         NUMERICAL_FEATURES
         if config["continuous_features"] == "all"
@@ -231,17 +232,30 @@ def load_data_and_model(config_path: str, checkpoint_path: str):
     column_schema = getattr(DatasetSchemas, config["dataset"])()
     if config["dataset"] == "BPI17":
         labeled_df = add_outcome_labels(log.dataframe, column_schema, LABELS_DICT)
-        binary_labeled_df = labeled_df[labeled_df["outcome"] != 2]  # drop O_Refused
-    
+        labeled_df = labeled_df[labeled_df["outcome"] != 2]  # drop O_Refused
+
     elif config["dataset"] == "Sepsis":
-        binary_labeled_df = log.dataframe.copy()
-        binary_labeled_df["outcome"] = binary_labeled_df["case:concept:name"].apply(
-            lambda x: 0 if "Return ER" in log.dataframe[log.dataframe["case:concept:name"] == x]["concept:name"].values else 1
+        labeled_df = log.dataframe.copy()
+        labeled_df = (
+            labeled_df.groupby("case:concept:name")
+            .apply(extract_timestamp_features)
+            .reset_index(drop=True)
         )
-    
-    unbiased_split_kwargs = log.unbiased_split_params if log._unbiased_split_params is not None else {} 
+        labeled_df = (
+            labeled_df.groupby("case:concept:name")
+            .apply(
+                lambda group: check_if_activity_exists_and_time_less_than(
+                    group, "Return ER"
+                )
+            )
+            .reset_index(drop=True)
+        )
+
+    unbiased_split_kwargs = (
+        log.unbiased_split_params if log._unbiased_split_params is not None else {}
+    )
     train_loader, test_loader = setup_dataloaders(
-        config, binary_labeled_df, unbiased_split_kwargs
+        config, labeled_df, unbiased_split_kwargs
     )
     model = setup_model(
         config,

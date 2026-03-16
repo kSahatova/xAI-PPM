@@ -79,37 +79,6 @@ PRETRAINED_CONFIGS = {
 EVENT_LOGS = {"BPI17": BPI17}
 
 
-def truncate_trailing_outcome_activities(
-    df: pd.DataFrame,
-    case_col: str = "case_id",
-    activity_col: str = "activity",
-    outcome_codes: set = {13, 14},
-) -> pd.DataFrame:
-    """
-    For each trace (grouped by case_id), remove trailing activities
-    that are outcome-revealing (encoded as 13=O_Accepted, 14=O_Cancelled).
-
-    Only removes consecutive outcome activities from the END of the trace.
-    Mid-trace occurrences are preserved.
-    """
-
-    drop_indices = []
-
-    for case_id, group in df.groupby(case_col, sort=False):
-        # Iterate backwards through the trace events
-        indices = group.index.tolist()
-        activities = group[activity_col].tolist()
-
-        for i in range(len(activities) - 1, -1, -1):
-            if activities[i] in outcome_codes:
-                drop_indices.append(indices[i])
-            else:
-                break  # Stop at the first non-outcome activity
-
-    df_truncated = df.drop(index=drop_indices).reset_index(drop=True)
-    return df_truncated
-
-
 def main(training_config: dict):
     log = EVENT_LOGS[training_config["log"]]()
 
@@ -119,13 +88,6 @@ def main(training_config: dict):
 
     # Remove O_Refused to convert the task to a binary classification
     binary_labeled_df = labeled_df[labeled_df["outcome"] != 2]
-    # Truncate trailing outcome activities to prevent data leakage
-    binary_labeled_df = truncate_trailing_outcome_activities(
-        binary_labeled_df,
-        case_col=column_schema.case_id_col,
-        activity_col=column_schema.activity_col,
-        outcome_codes={"O_Accepted", "O_Cancelled"},
-    )
     
     print(
         "Outcomes of the cases are ",

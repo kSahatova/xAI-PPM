@@ -26,7 +26,8 @@ from timeshap.wrappers.outcome_predictor_wrapper import OutcomePredictorWrapper
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-SEG_STRATEGIES = ["per_event", "distribution", "transition"]
+SEG_STRATEGIES = ["per_event", "random", "distribution", "transition"]
+RANDOM_SEEDS = [6, 32, 42, 105]
 COHORT_ORDER = ["medium"]
 SAMPLE_NAMES = ["tp", "fp", "fn", "tn"]
 TOP_N_PATTERNS = 10
@@ -57,7 +58,7 @@ _ROW_LABELS = {
 }
 _STRATEGY_LABELS = {
     "per_event": "Per-event segmentation",
-    # "random": "Random segmentation",
+    "random": "Random segmentation",
     "distribution": "Distribution-based segmentation",
     "transition": "Transition-based segmentation",
 }
@@ -96,14 +97,14 @@ def compute_monotonicity_for_case(
     segment_ids: list,
     avg_event: np.ndarray,
     fetching_fn,
-    epsilon: float = 1e-4,
 ) -> float:
     """Compute the monotonicity score for a single instance.
 
-    Starts from a fully masked trace and incrementally restores segments in
+    Starts from the original trace and perturbs segments one by one in
     descending order of |SHAP| importance.  At each step the distance to the
-    original prediction should decrease — the fraction of steps where this
-    holds (within tolerance ε) is the monotonicity score.
+    original prediction Δ_i = |f(σ) − f(σ^(i))| should increase — the
+    fraction of consecutive pairs (Δ_i, Δ_{i+1}) where Δ_{i+1} > Δ_i is
+    the monotonicity score.
 
     Parameters
     ----------
@@ -113,40 +114,152 @@ def compute_monotonicity_for_case(
     segment_ids : list of lists – timestep indices per segment
     avg_event : (1, D) ndarray – perturbation baseline
     fetching_fn : wrapped model; f(x) -> (predictions (B,1), hidden_state)
-    epsilon : tolerance added to each step's distance threshold
 
     Returns
     -------
-    float in [0, 1] – fraction of monotonically improving steps
+    float in [0, 1] – fraction of monotonically increasing distance steps,
+    or np.nan when fewer than 2 segments exist (score is undefined).
     """
     n_segments = len(segment_ids)
-    if n_segments == 0:
-        return 1.0
+    if n_segments < 2:
+        return np.nan
 
-    # Step 1: fully masked trace
-    masked = _perturb_segments(case, segment_ids, list(range(n_segments)), avg_event)
-
-    # Step 2: rank segments by descending |SHAP|
+    # Rank segments by descending |SHAP|
     order = np.argsort(np.abs(segment_sv.flatten()))[::-1].tolist()
 
-    # Step 3: incremental restoration, collecting one prediction per step
-    pred_masked, _ = fetching_fn(masked)
-    predictions = [float(pred_masked[0, 0])]
-    current = masked.copy()
+    # Perturb one by one, computing Δ_i = |y_hat - f(σ^(i))| after each removal
+    delta = [0.0]
+    current = case.copy()
     for seg_idx in order:
         for t in segment_ids[seg_idx]:
-            current[0, t, :] = case[0, t, :]
+            current[0, t, :] = avg_event[0, :]
         pred, _ = fetching_fn(current)
-        predictions.append(float(pred[0, 0]))
+        delta.append(abs(y_hat - float(pred[0, 0])))
 
-    # Step 4: distance to original prediction at each step
-    distances = [abs(y_hat - p) for p in predictions]
-
-    # Step 5: count steps where distance decreased (within epsilon)
+    # Count consecutive pairs where distance strictly increased
     monotonic_steps = sum(
-        1 for i in range(1, len(distances)) if distances[i] < distances[i - 1] + epsilon
+        1 for i in range(1, n_segments) if delta[i + 1] > delta[i]
     )
-    return monotonic_steps / (len(distances) - 1)
+    return monotonic_steps / (n_segments - 1)
+
+
+def compute_monotonicity_grouped_for_case(
+    case: np.ndarray,
+    y_hat: float,
+    per_event_sv: np.ndarray,
+    per_event_seg_ids: list,
+    grouped_seg_ids: list,
+    avg_event: np.ndarray,
+    fetching_fn,
+) -> float:
+    """Monotonicity using per-event SVs re-grouped by a reference segmentation.
+
+    Per-event SHAP values are averaged within each group defined by
+    *grouped_seg_ids* (e.g., transition-based change points), producing one
+    aggregated SV per group.  Monotonicity is then evaluated at the group
+    level using those aggregated SVs.
+
+    Parameters
+    ----------
+    case : (1, L, D) ndarray
+    y_hat : scalar – original model prediction probability
+    per_event_sv : (n_events,) ndarray – one SHAP value per event (timestep)
+    per_event_seg_ids : list of lists – each inner list has exactly one index,
+        i.e. [[0], [1], [2], ...] as produced by the per-event strategy
+    grouped_seg_ids : list of lists – reference grouping of timesteps,
+        e.g. from the transition-based segmentation
+    avg_event : (1, D) ndarray – perturbation baseline
+    fetching_fn : wrapped model; f(x) -> (predictions (B,1), hidden_state)
+
+    Returns
+    -------
+    float in [0, 1] – monotonicity score based on the grouped attributions
+    """
+    if not grouped_seg_ids:
+        return 1.0
+
+    # Build timestep → per-event SV mapping
+    sv_flat = per_event_sv.flatten()
+    t_to_sv: dict = {}
+    for sv_val, seg in zip(sv_flat, per_event_seg_ids):
+        for t in seg:
+            t_to_sv[t] = float(sv_val)
+
+    # Average per-event SVs within each group → one aggregated SV per group
+    grouped_sv = np.array([
+        np.mean([t_to_sv.get(t, 0.0) for t in seg])
+        for seg in grouped_seg_ids
+    ])
+
+    return compute_monotonicity_for_case(
+        case, y_hat, grouped_sv, grouped_seg_ids, avg_event, fetching_fn
+    )
+
+
+def compute_positive_relevance_monotonicity(
+    case: np.ndarray,
+    y_hat: float,
+    segment_sv: np.ndarray,
+    segment_ids: list,
+    avg_event: np.ndarray,
+    fetching_fn,
+) -> float:
+    """Positive-Relevance Monotonicity via Progressive Corruption.
+
+    Only segments with positive SHAP attribution are considered.  They are
+    sorted in descending order of their SHAP value (π) and then removed one
+    by one from the trace (replaced by *avg_event*).  The cumulative score
+    drop after each removal is Δ_i = f(σ) − f(σ^(i)), where σ^(i) is the
+    trace with the first i positive-attribution segments zeroed out.
+
+    The score counts the fraction of consecutive pairs (Δ_i, Δ_{i+1}) where
+    the drop strictly increases:
+
+        M⁺(σ) = 1/(m⁺−1) · Σ_{i=1}^{m⁺−1} 𝟙[Δ_{i+1} > Δ_i]
+
+    A score of 1.0 means every successive removal of a positive-attribution
+    segment further decreased the predicted probability, confirming that the
+    SHAP ranking correctly orders segments by contribution.
+
+    Parameters
+    ----------
+    case : (1, L, D) ndarray
+    y_hat : scalar – original model prediction probability
+    segment_sv : (n_segments,) ndarray – segment SHAP values
+    segment_ids : list of lists – timestep indices per segment
+    avg_event : (1, D) ndarray – perturbation baseline
+    fetching_fn : wrapped model; f(x) -> (predictions (B,1), hidden_state)
+
+    Returns
+    -------
+    float in [0, 1], or np.nan when fewer than 2 positive-attribution segments
+    exist (score is undefined).
+    """
+    sv_flat = segment_sv.flatten()
+
+    # R+ = segments with positive attribution
+    pos_indices = [j for j, v in enumerate(sv_flat) if v > 0]
+    m_pos = len(pos_indices)
+
+    if m_pos < 2:
+        return np.nan  # undefined: need at least 2 positive segments
+
+    # π = sort positive segments by descending SHAP value
+    pi = sorted(pos_indices, key=lambda j: sv_flat[j], reverse=True)
+
+    # Compute Δ_i = f(σ) - f(σ^(i)) for i = 0, 1, ..., m+
+    # Δ_0 = 0 by definition; each σ^(i) has the first i segments in π masked
+    delta = [0.0]
+    current = case.copy()
+    for seg_idx in pi:
+        for t in segment_ids[seg_idx]:
+            current[0, t, :] = avg_event[0, :]
+        pred, _ = fetching_fn(current)
+        delta.append(y_hat - float(pred[0, 0]))
+
+    # M+(σ) = 1/(m+-1) * Σ_{i=1}^{m+-1} 𝟙[Δ_{i+1} > Δ_i]
+    count = sum(1 for i in range(1, m_pos) if delta[i + 1] > delta[i])
+    return count / (m_pos - 1)
 
 
 def compute_rpc_for_case(
@@ -267,8 +380,9 @@ def evaluate_rpc(
     avg_event: np.ndarray,
     fetching_fn,
     k_values_per_cohort: Dict[str, List[int]],
-    epsilon: float = 1e-4,
     n_workers: int = 1,
+    ref_explicands_info: "Dict | None" = None,
+    compute_mono: bool = True,
 ) -> Dict:
     """Compute mean RPCi, RPCu, and Monotonicity for every cohort × predicted-class × k.
 
@@ -282,15 +396,25 @@ def evaluate_rpc(
     k_values_per_cohort : mapping from cohort name to the list of k values
         to evaluate for that cohort, e.g.
         {"short": [1, 2], "medium": [1, 2, 3], "long": [1, 2, 3, 4, 5]}
-    epsilon : tolerance for monotonicity step check
-    n_workers : number of threads for parallel monotonicity computation.
+    n_workers : number of threads for parallel per-case metric computation.
         Uses ThreadPoolExecutor — safe for model inference since PyTorch
         releases the GIL during C++ operations.
+    ref_explicands_info : optional nested dict with the same structure as
+        explicands_info.  When provided, the segment_ids from the reference
+        strategy are used to group per-event SVs and a second monotonicity
+        score ("grouped_mono") is computed and stored alongside the standard
+        one.  Cases must be aligned (same order) with explicands_info.
+    compute_mono : if False, skip compute_monotonicity_for_case and
+        compute_monotonicity_grouped_for_case entirely; neither "mono" nor
+        "grouped_mono" keys will appear in the results.
 
     Returns
     -------
     results[cohort][group][k] -> dict with
-        rpc_i, rpc_u, rpc_i_std, rpc_u_std, mono, mono_std, n
+        rpc_i, rpc_u, rpc_i_std, rpc_u_std, n,
+        and optionally mono, mono_std when compute_mono=True,
+        pos_mono, pos_mono_std (when >= 2 positive-attribution segments exist),
+        and grouped_mono, grouped_mono_std when ref_explicands_info is provided.
         group is one of: sample name (tp/fp/fn/tn),
                          "predicted_positive", "predicted_negative"
     """
@@ -309,19 +433,31 @@ def evaluate_rpc(
         def _empty_acc():
             return {k: [] for k in k_values}
 
-        def _aggregate(acc_i, acc_u, acc_mono):
-            return {
-                k: {
+        has_ref = ref_explicands_info is not None
+
+        def _aggregate(acc_i, acc_u, acc_mono=None, acc_pos_mono=None, acc_grouped_mono=None):
+            out = {}
+            for k in k_values:
+                d = {
                     "rpc_i": float(np.mean(acc_i[k])),
                     "rpc_u": float(np.mean(acc_u[k])),
                     "rpc_i_std": float(np.std(acc_i[k])),
                     "rpc_u_std": float(np.std(acc_u[k])),
-                    "mono": float(np.mean(acc_mono[k])),
-                    "mono_std": float(np.std(acc_mono[k])),
                     "n": len(acc_i[k]),
                 }
-                for k in k_values
-            }
+                if acc_mono is not None and acc_mono[k]:
+                    d["mono"] = float(np.mean(acc_mono[k]))
+                    d["mono_std"] = float(np.std(acc_mono[k]))
+                if acc_pos_mono is not None:
+                    valid = [v for v in acc_pos_mono[k] if not np.isnan(v)]
+                    if valid:
+                        d["pos_mono"] = float(np.mean(valid))
+                        d["pos_mono_std"] = float(np.std(valid))
+                if acc_grouped_mono is not None and acc_grouped_mono[k]:
+                    d["grouped_mono"] = float(np.mean(acc_grouped_mono[k]))
+                    d["grouped_mono_std"] = float(np.std(acc_grouped_mono[k]))
+                out[k] = d
+            return out
 
         results[cohort] = {}
         class_rpc_i = {
@@ -336,6 +472,14 @@ def evaluate_rpc(
             "predicted_positive": _empty_acc(),
             "predicted_negative": _empty_acc(),
         }
+        class_pos_mono = {
+            "predicted_positive": _empty_acc(),
+            "predicted_negative": _empty_acc(),
+        }
+        class_grouped_mono = (
+            {"predicted_positive": _empty_acc(), "predicted_negative": _empty_acc()}
+            if has_ref else None
+        )
 
         for name, data in samples.items():
             results[cohort][name] = {}
@@ -345,25 +489,52 @@ def evaluate_rpc(
             from concurrent.futures import ThreadPoolExecutor
             from tqdm import tqdm
 
+            ref_data = (
+                ref_explicands_info.get(cohort, {}).get(name)
+                if has_ref else None
+            )
             _args = [
-                (case, y_hat, sv_info["segment_sv"], sv_info["segment_ids"])
-                for case, y_hat, sv_info in zip(
-                    data["cases"], data["y_pred"], data["sv"]
+                (
+                    case,
+                    y_hat,
+                    sv_info["segment_sv"],
+                    sv_info["segment_ids"],
+                    ref_sv_info["segment_ids"] if ref_sv_info is not None else None,
+                )
+                for case, y_hat, sv_info, ref_sv_info in zip(
+                    data["cases"],
+                    data["y_pred"],
+                    data["sv"],
+                    ref_data["sv"] if ref_data is not None else [None] * len(data["cases"]),
                 )
             ]
+
+            def _compute_all(a):
+                case_, y_hat_, sv_, seg_ids_, ref_seg_ids_ = a
+                mono = (
+                    compute_monotonicity_for_case(case_, y_hat_, sv_, seg_ids_, avg_event, fetching_fn)
+                    if compute_mono else None
+                )
+                pos_mono = compute_positive_relevance_monotonicity(case_, y_hat_, sv_, seg_ids_, avg_event, fetching_fn)
+                grouped_mono = (
+                    compute_monotonicity_grouped_for_case(
+                        case_, y_hat_, sv_, seg_ids_, ref_seg_ids_, avg_event, fetching_fn
+                    )
+                    if (compute_mono and ref_seg_ids_ is not None) else None
+                )
+                return mono, pos_mono, grouped_mono
+
             with ThreadPoolExecutor(max_workers=n_workers) as executor:
-                mono_list = list(
+                all_list = list(
                     tqdm(
-                        executor.map(
-                            lambda a: compute_monotonicity_for_case(
-                                a[0], a[1], a[2], a[3], avg_event, fetching_fn, epsilon
-                            ),
-                            _args,
-                        ),
+                        executor.map(_compute_all, _args),
                         total=len(_args),
-                        desc=f"Monotonicity [{cohort}/{name}]",
+                        desc=f"Mono [{cohort}/{name}]",
                     )
                 )
+            mono_list = [v[0] for v in all_list]       # None entries when compute_mono=False
+            pos_mono_list = [v[1] for v in all_list]   # np.nan when < 2 positive segments
+            grouped_mono_list = [v[2] for v in all_list]  # None entries when no ref or compute_mono=False
 
             for k in k_values:
                 rpc_i_list, rpc_u_list = [], []
@@ -381,28 +552,48 @@ def evaluate_rpc(
                     )
                     rpc_i_list.append(rpc_i)
                     rpc_u_list.append(rpc_u)
-                results[cohort][name][k] = {
+
+                valid_mono = [v for v in mono_list if v is not None]
+                valid_pos_mono = [v for v in pos_mono_list if not np.isnan(v)]
+                valid_grouped = [v for v in grouped_mono_list if v is not None]
+                entry = {
                     "rpc_i": float(np.mean(rpc_i_list)),
                     "rpc_u": float(np.mean(rpc_u_list)),
                     "rpc_i_std": float(np.std(rpc_i_list)),
                     "rpc_u_std": float(np.std(rpc_u_list)),
-                    "mono": float(np.mean(mono_list)),
-                    "mono_std": float(np.std(mono_list)),
                     "n": len(rpc_i_list),
                 }
+                if valid_mono:
+                    entry["mono"] = float(np.mean(valid_mono))
+                    entry["mono_std"] = float(np.std(valid_mono))
+                if valid_pos_mono:
+                    entry["pos_mono"] = float(np.mean(valid_pos_mono))
+                    entry["pos_mono_std"] = float(np.std(valid_pos_mono))
+                if valid_grouped:
+                    entry["grouped_mono"] = float(np.mean(valid_grouped))
+                    entry["grouped_mono_std"] = float(np.std(valid_grouped))
+                results[cohort][name][k] = entry
+
                 class_rpc_i[pred_class][k].extend(rpc_i_list)
                 class_rpc_u[pred_class][k].extend(rpc_u_list)
-                class_mono[pred_class][k].extend(mono_list)
+                class_mono[pred_class][k].extend(valid_mono)
+                class_pos_mono[pred_class][k].extend(pos_mono_list)
+                if class_grouped_mono is not None:
+                    class_grouped_mono[pred_class][k].extend(valid_grouped)
 
         results[cohort]["predicted_positive"] = _aggregate(
             class_rpc_i["predicted_positive"],
             class_rpc_u["predicted_positive"],
             class_mono["predicted_positive"],
+            class_pos_mono["predicted_positive"],
+            class_grouped_mono["predicted_positive"] if class_grouped_mono else None,
         )
         results[cohort]["predicted_negative"] = _aggregate(
             class_rpc_i["predicted_negative"],
             class_rpc_u["predicted_negative"],
             class_mono["predicted_negative"],
+            class_pos_mono["predicted_negative"],
+            class_grouped_mono["predicted_negative"] if class_grouped_mono else None,
         )
 
     return results
@@ -434,32 +625,53 @@ def save_rpc_latex_table(
     for results in results_per_strategy.values():
         cohorts.update(results.keys())
 
-    def _pooled_mono(group_metrics: List[Dict]) -> Tuple[float, float]:
-        """Pooled mean and std of monotonicity across multiple groups."""
+    def _pooled_stat(group_metrics: List[Dict], key: str) -> Tuple[float, float]:
+        """Pooled mean and std of *key* / *key*_std across multiple groups."""
+        std_key = f"{key}_std"
         total_n = sum(m["n"] for m in group_metrics)
         if total_n == 0:
             return 0.0, 0.0
-        pooled_mean = sum(m["mono"] * m["n"] for m in group_metrics) / total_n
+        pooled_mean = sum(m[key] * m["n"] for m in group_metrics) / total_n
         pooled_var = (
             sum(
-                m["n"] * (m["mono_std"] ** 2 + (m["mono"] - pooled_mean) ** 2)
+                m["n"] * (m[std_key] ** 2 + (m[key] - pooled_mean) ** 2)
                 for m in group_metrics
             )
             / total_n
         )
         return pooled_mean, float(np.sqrt(max(pooled_var, 0.0)))
 
+    # Detect whether any strategy has pos_mono / grouped_mono results
+    def _any_key(key):
+        return any(
+            key in m
+            for results in results_per_strategy.values()
+            for cohort_data in results.values()
+            for group_data in cohort_data.values()
+            for m in (group_data.values() if isinstance(group_data, dict) else [])
+            if isinstance(m, dict)
+        )
+
+    has_pos_mono = _any_key("pos_mono")
+    n_cols = 3 + int(has_pos_mono) + 1  # label + RPCi + RPCu + optional cols + k
+    col_spec = "l" + " c" * (n_cols - 1)
+
     for cohort in sorted(cohorts):
-        lines += [
-            r"\begin{table}[!ht]",
-            r"\centering",
-            r"\begin{tabular}{l c c c c}",
-            r"\toprule",
+        header = (
             r"\textbf{Predicted class}"
             r" & $\mathrm{RPCI}$"
             r" & $\mathrm{RPCU}$"
-            r" & Monotonicity"
-            r" & $k$ \\ \midrule",
+        )
+        if has_pos_mono:
+            header += r" & Pos. Relevance Mono"
+        header += r" & $k$ \\ \midrule"
+
+        lines += [
+            r"\begin{table}[!ht]",
+            r"\centering",
+            rf"\begin{{tabular}}{{{col_spec}}}",
+            r"\toprule",
+            header,
         ]
 
         for strategy, results in results_per_strategy.items():
@@ -467,7 +679,7 @@ def save_rpc_latex_table(
 
             strategy_label = _STRATEGY_LABELS.get(strategy, strategy)
             lines.append(
-                rf"\multicolumn{{5}}{{l}}{{\mathrm{{{strategy_label}}}}} \\ \midrule"
+                rf"\multicolumn{{{n_cols}}}{{l}}{{\mathrm{{{strategy_label}}}}} \\ \midrule"
             )
 
             # Determine which groups are present and collect rows per k
@@ -478,14 +690,18 @@ def save_rpc_latex_table(
             k_vals = sorted({k for g in present_groups for k in cohort_data[g]})
 
             for k in k_vals:
-                # Combined (pooled) monotonicity across all present groups for this k
                 group_metrics_for_k = [
                     cohort_data[g][k] for g in present_groups if k in cohort_data[g]
                 ]
-                c_mean, c_std = _pooled_mono(group_metrics_for_k)
-                mono_cell = (
-                    rf"\multirow{{{n_groups}}}{{*}}{{${c_mean:.3f} \pm {c_std:.3f}$}}"
-                )
+                # Positive relevance mono: only present when metrics have the key
+                pm_cell = ""
+                if has_pos_mono:
+                    pm_metrics = [m for m in group_metrics_for_k if "pos_mono" in m]
+                    if pm_metrics:
+                        pm_mean, pm_std = _pooled_stat(pm_metrics, "pos_mono")
+                        pm_cell = (
+                            rf"\multirow{{{n_groups}}}{{*}}{{${pm_mean:.3f} \pm {pm_std:.3f}$}}"
+                        )
 
                 for row_idx, group in enumerate(present_groups):
                     if k not in cohort_data[group]:
@@ -494,9 +710,11 @@ def save_rpc_latex_table(
                     label = _ROW_LABELS.get(group, group.upper())
                     rpc_i = f"{m['rpc_i']:.3f} $\\pm$ {m['rpc_i_std']:.3f}"
                     rpc_u = f"{m['rpc_u']:.3f} $\\pm$ {m['rpc_u_std']:.3f}"
-                    # Monotonicity cell only in first row; empty in subsequent rows
-                    mono_part = mono_cell if row_idx == 0 else ""
-                    lines.append(rf"{label} & {rpc_i} & {rpc_u} & {mono_part} & {k} \\")
+                    row = rf"{label} & {rpc_i} & {rpc_u}"
+                    if has_pos_mono:
+                        row += f" & {pm_cell if row_idx == 0 else ''}"
+                    row += rf" & {k} \\"
+                    lines.append(row)
 
             lines.append(r"\bottomrule")
 
@@ -519,10 +737,45 @@ def save_rpc_latex_table(
 
 
 def print_rpc_table(results: Dict) -> None:
+    # Pre-compute combined pos_mono per (cohort, k) pooled across both predicted classes
+    combined_pos_mono: Dict[Tuple, Tuple] = {}
+    for cohort, samples in results.items():
+        pred_groups = ["predicted_positive", "predicted_negative"]
+        k_vals: set = set()
+        for g in pred_groups:
+            if g in samples:
+                k_vals.update(samples[g].keys())
+        for k in k_vals:
+            group_metrics = [
+                samples[g][k] for g in pred_groups
+                if g in samples and k in samples[g] and "pos_mono" in samples[g][k]
+            ]
+            if not group_metrics:
+                continue
+            total_n = sum(m["n"] for m in group_metrics)
+            pooled_mean = sum(m["pos_mono"] * m["n"] for m in group_metrics) / total_n
+            pooled_var = (
+                sum(
+                    m["n"] * (m["pos_mono_std"] ** 2 + (m["pos_mono"] - pooled_mean) ** 2)
+                    for m in group_metrics
+                )
+                / total_n
+            )
+            combined_pos_mono[(cohort, k)] = (
+                round(pooled_mean, 4),
+                round(float(np.sqrt(max(pooled_var, 0.0))), 4),
+            )
+
     rows = []
     for cohort, samples in results.items():
         for name, k_dict in samples.items():
             for k, m in k_dict.items():
+                # For individual samples (tp/fp/fn/tn) use their own pos_mono;
+                # for aggregated classes use the combined pooled value.
+                if name in SAMPLE_NAMES and "pos_mono" in m:
+                    pm = (round(m["pos_mono"], 4), round(m.get("pos_mono_std", 0.0), 4))
+                else:
+                    pm = combined_pos_mono.get((cohort, k))
                 rows.append(
                     {
                         "cohort": cohort,
@@ -532,8 +785,8 @@ def print_rpc_table(results: Dict) -> None:
                         "RPCi (std)": round(m["rpc_i_std"], 4),
                         "RPCu (mean)": round(m["rpc_u"], 4),
                         "RPCu (std)": round(m["rpc_u_std"], 4),
-                        "Mono (mean)": round(m["mono"], 4),
-                        "Mono (std)": round(m["mono_std"], 4),
+                        "Pos Mono (mean)": pm[0] if pm else None,
+                        "Pos Mono (std)": pm[1] if pm else None,
                         "n": m["n"],
                     }
                 )
@@ -542,6 +795,90 @@ def print_rpc_table(results: Dict) -> None:
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
+
+
+def aggregate_random_results(results_per_seed: List[Dict]) -> Dict:
+    """Average evaluate_rpc metric dicts across multiple random seeds.
+
+    Each seed was run on the same set of instances (same n), so means are
+    averaged uniformly and the combined std accounts for both within-seed
+    variance and between-seed variance of the mean:
+
+        pooled_std = sqrt( mean(std_i²) + mean((mean_i − pooled_mean)²) )
+
+    n is taken from the first seed (identical across seeds).
+
+    Parameters
+    ----------
+    results_per_seed : list of evaluate_rpc return dicts, one per seed
+
+    Returns
+    -------
+    Dict with the same structure as a single evaluate_rpc result.
+    """
+    _SCALAR_KEYS = ["rpc_i", "rpc_u", "mono", "pos_mono", "grouped_mono"]
+
+    if not results_per_seed:
+        return {}
+
+    ref = results_per_seed[0]
+    aggregated: Dict = {}
+
+    for cohort, cohort_data in ref.items():
+        aggregated[cohort] = {}
+        for group, group_data in cohort_data.items():
+            aggregated[cohort][group] = {}
+            for k in group_data:
+                seed_entries = [
+                    r[cohort][group][k]
+                    for r in results_per_seed
+                    if cohort in r and group in r[cohort] and k in r[cohort][group]
+                ]
+                if not seed_entries:
+                    continue
+
+                entry: Dict = {"n": seed_entries[0]["n"]}
+
+                for key in _SCALAR_KEYS:
+                    std_key = f"{key}_std"
+                    valid = [e for e in seed_entries if key in e]
+                    if not valid:
+                        continue
+                    means = [e[key] for e in valid]
+                    vars_ = [e[std_key] ** 2 for e in valid]
+                    pooled_mean = sum(means) / len(means)
+                    pooled_var = (
+                        sum(vars_) / len(vars_)
+                        + sum((m - pooled_mean) ** 2 for m in means) / len(means)
+                    )
+                    entry[key] = float(pooled_mean)
+                    entry[std_key] = float(np.sqrt(max(pooled_var, 0.0)))
+
+                aggregated[cohort][group][k] = entry
+
+    return aggregated
+
+
+def load_seed_explicands(sv_dir: str, cohort: str, seed: int) -> Dict[str, Dict]:
+    """Load random-segmentation results for a single seed.
+
+    Parameters
+    ----------
+    sv_dir : root directory containing per-seed folders
+    cohort : cohort name, e.g. "medium"
+    seed   : integer seed value
+
+    Returns
+    -------
+    Dict[sample_name -> loaded pickle data]
+    """
+    seed_dir = osp.join(sv_dir, f"random_cohort_{cohort}_seed{seed}")
+    data: Dict[str, Dict] = {}
+    for name in SAMPLE_NAMES:
+        pkl_path = osp.join(seed_dir, f"{name}_segment_sv_results.pkl")
+        with open(pkl_path, "rb") as f:
+            data[name] = pickle.load(f)
+    return data
 
 
 def main():
@@ -553,6 +890,8 @@ def main():
     print("=" * 80)
 
     for strategy in SEG_STRATEGIES:
+        if strategy == "random":
+            continue  # handled per-seed during evaluation
         explicands_per_strategy[strategy] = {}
         for cohort in COHORT_ORDER:
             sv_cohort_dir = osp.join(sv_output_dir, f"{strategy}_cohort_{cohort}")
@@ -566,6 +905,7 @@ def main():
     print("\nLoading model and building average-event baseline")
     config, train_loader, _, model = load_data_and_model(config_path, checkpoint_path)
     avg_event, _ = build_average_event_baseline(train_loader, config)
+    avg_event = np.asarray(avg_event)
 
     wrapped_model = OutcomePredictorWrapper(
         model, batch_budget=1, categorical_indices=[0], device=config["device"]
@@ -582,7 +922,15 @@ def main():
 
     for strategy, explicands_info in explicands_per_strategy.items():
         print(f"--- Strategy: {strategy} ---")
-        k_per_cohort = compute_adaptive_k(explicands_info, coverage=0.3)
+        k_per_cohort = compute_adaptive_k(explicands_info, coverage=0.4)
+
+        # For per-event strategy, also compute grouped monotonicity using
+        # transition-based change points to re-group the per-event SVs.
+        ref_info = (
+            explicands_per_strategy.get("transition")
+            if strategy == "per_event"
+            else None
+        )
 
         print(
             f"Evaluating RPCi / RPCu for k in {k_per_cohort} "
@@ -590,19 +938,50 @@ def main():
         )
         rpc_per_strategy[strategy] = evaluate_rpc(
             explicands_info,
-            avg_event.to_numpy(),
+            avg_event,
             fetching_fn,
             k_values_per_cohort=k_per_cohort,
             n_workers=9,
+            ref_explicands_info=ref_info,
+            compute_mono=False
         )
 
-    # ── 4. Report ────────────────────────────────────────────────────
-    for strategy, results in rpc_per_strategy.items():
-        print(f"\n--- RPCi / RPCu results [{strategy}] (avg_event baseline) ---")
-        print_rpc_table(results)
+    # ── Random strategy: evaluate per seed, then aggregate ──────────
+    print("--- Strategy: random ---")
+    seed_results: List[Dict] = []
+    k_per_cohort_random: Dict = {}
+    for seed in RANDOM_SEEDS:
+        seed_explicands = {
+            cohort: load_seed_explicands(sv_output_dir, cohort, seed)
+            for cohort in COHORT_ORDER
+        }
+        if not k_per_cohort_random:
+            k_per_cohort_random = compute_adaptive_k(seed_explicands, coverage=0.4)
+        print(
+            f"  seed={seed}: evaluating RPCi / RPCu for k in {k_per_cohort_random} ..."
+        )
+        seed_results.append(evaluate_rpc(
+            seed_explicands,
+            avg_event,
+            fetching_fn,
+            k_values_per_cohort=k_per_cohort_random,
+            n_workers=9,
+            ref_explicands_info=None,
+            compute_mono=False,
+        ))
+    rpc_per_strategy["random"] = aggregate_random_results(seed_results)
 
+    # ── 4. Report ────────────────────────────────────────────────────
+    report_order = ["per_event", "random", "distribution", "transition"]
+    for strategy in report_order:
+        if strategy not in rpc_per_strategy:
+            continue
+        print(f"\n--- RPCi / RPCu results [{strategy}] (avg_event baseline) ---")
+        print_rpc_table(rpc_per_strategy[strategy])
+
+    ordered_rpc = {s: rpc_per_strategy[s] for s in report_order if s in rpc_per_strategy}
     tex_path = osp.join(OUTPUT_ROOT, "shap_values", "bpi17", "rpc_table.tex")
-    save_rpc_latex_table(rpc_per_strategy, output_path=tex_path)
+    save_rpc_latex_table(ordered_rpc, output_path=tex_path)
 
     # ── 5. Persist ───────────────────────────────────────────────────
     # out_path = osp.join(sv_output_dir, "rpci_rpcu_results_avg_pert_strategy.pkl")

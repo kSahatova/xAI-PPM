@@ -29,6 +29,9 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.figure import Figure
 
 from experiments.setup_experiment import load_data_and_model
+from local_xai.utils.trace_segmentation.evaluation import (
+    compute_er_full_and_segments, compute_er_full, compute_er_segments
+)
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -39,10 +42,10 @@ PROJECT_DIR = r"D:\PycharmProjects\xAI-PPM"
 OUTPUT_ROOT = osp.join(PROJECT_DIR, r"outputs")
 
 
-config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op_sepsis.txt")
-# config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op.txt")
-checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\Sepsis_rnn_outcome_sepsis.pth")
-# checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\BPI17_rnn_outcome_bpi17.pth")
+# config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op_sepsis.txt")
+config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op.txt")
+# checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\Sepsis_rnn_outcome_sepsis.pth")
+checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\BPI17_rnn_outcome_bpi17.pth")
 
 SAMPLE_META = {
     "tp": dict(label="TP\n(cancelled, correct)", color="#3D7AACB6"),
@@ -96,363 +99,7 @@ def _activity_change_points(
     )
 
 
-def build_pattern_sv_df(explicands_info: Dict[str, Dict]) -> pd.DataFrame:
-    """Build a long-format DataFrame with one row per (trace × segment).
-
-    Columns
-    -------
-    cohort, sample, trace_id, pattern, seg_idx, shap_value
-        trace_id  – unique integer within each (cohort, sample) group
-        pattern   – tuple of change-point positions, e.g. (5, 9, 14)
-        seg_idx   – 0-based segment position within the trace
-        shap_value – segment-level SHAP value
-    """
-    rows = []
-    for cohort, cohort_data in explicands_info.items():
-        for sample, info in cohort_data.items():
-            for trace_id, sv_dict in enumerate(info.get("sv", [])):
-                seg_ids = sv_dict["segment_ids"]
-                shap_values = np.asarray(sv_dict["segment_sv"]).ravel()
-                cp = _change_points(seg_ids)
-                for seg_idx, sv in enumerate(shap_values):
-                    rows.append(
-                        {
-                            "cohort": cohort,
-                            "sample": sample,
-                            "trace_id": trace_id,
-                            "pattern": cp,
-                            "seg_idx": seg_idx,
-                            "shap_value": float(sv),
-                        }
-                    )
-
-    return pd.DataFrame(rows)
-
-
-def _top_n_patterns(
-    df: pd.DataFrame,
-    cohort: str,
-    sample: str,
-    top_n: int,
-) -> List[Tuple]:
-    """Return the *top_n* patterns sorted by descending trace count."""
-    sub = df[(df["cohort"] == cohort) & (df["sample"] == sample)]
-    counts = (
-        sub.drop_duplicates(subset=["trace_id", "pattern"])
-        .groupby("pattern")
-        .size()
-        .sort_values(ascending=False)
-    )
-    return counts.head(top_n).index.tolist()
-
-
-def build_heatmap_matrix(
-    df: pd.DataFrame,
-    cohort: str,
-    sample: str,
-    top_n: int = TOP_N_PATTERNS,
-) -> Tuple[pd.DataFrame, pd.Series]:
-    """Build a (patterns × segment_positions) matrix of mean SHAP values.
-
-    Returns
-    -------
-    matrix : DataFrame  – rows = pattern labels, cols = "seg 1", "seg 2", …
-                          NaN where a segment position does not exist for the pattern.
-    counts : Series     – trace count per pattern (same row order as *matrix*).
-    """
-    sub = df[(df["cohort"] == cohort) & (df["sample"] == sample)]
-    patterns = _top_n_patterns(df, cohort, sample, top_n)
-
-    if not patterns:
-        return pd.DataFrame(), pd.Series(dtype=int)
-
-    # trace counts per pattern
-    trace_counts = (
-        sub.drop_duplicates(subset=["trace_id", "pattern"]).groupby("pattern").size()
-    )
-
-    # mean SHAP per (pattern, seg_idx) — only for the top patterns
-    pat_sub = sub[sub["pattern"].isin(patterns)]
-    pivot = (
-        pat_sub.groupby(["pattern", "seg_idx"])["shap_value"].mean().unstack("seg_idx")
-    )
-    pivot.columns = [f"seg {int(c) + 1}" for c in pivot.columns]
-
-    # reorder rows by frequency and attach readable labels
-    pivot = pivot.reindex(patterns)
-
-    def _row_label(pat: tuple) -> str:
-        cp_str = ", ".join(str(c) for c in pat) if pat else "—"
-        n = trace_counts.get(pat, 0)
-        return f"[{cp_str}]  (n={n})"
-
-    labels = [_row_label(p) for p in patterns]
-    pivot.index = labels
-    counts = pd.Series({_row_label(p): trace_counts.get(p, 0) for p in patterns})
-
-    return pivot, counts
-
-
-# ── Tile chart ─────────────────────────────────────────────────────────────────
-
-
-def plot_tile_charts(
-    df: pd.DataFrame,
-    cohorts: Optional[List[str]] = None,
-    top_n: int = TOP_N_PATTERNS,
-    output_path: str = "",
-) -> List[Figure]:
-    """Tile chart: mean SHAP value per segment for the top-N most frequent
-    change-point patterns.
-
-    One figure per cohort; columns = samples (TP / FP / FN / TN).
-    """
-    cohorts = [c for c in COHORT_ORDER if c in (cohorts or df["cohort"].unique())]
-    samples = [s for s in SAMPLE_NAMES if s in df["sample"].unique()]
-
-    # symmetric colour scale shared across the entire dataset
-    vmax = max(float(df["shap_value"].abs().max()), 1e-6)
-    norm = TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
-
-    figs: List[Figure] = []
-
-    for cohort in cohorts:
-        fig, axes = plt.subplots(
-            1,
-            len(samples),
-            figsize=(5.5 * len(samples) + 1.2, 0.5 * top_n + 2.5),
-            squeeze=False,
-        )
-
-        for c, sample in enumerate(samples):
-            ax = axes[0][c]
-            matrix, _ = build_heatmap_matrix(df, cohort, sample, top_n)
-
-            if matrix.empty:
-                ax.text(
-                    0.5,
-                    0.5,
-                    "no data",
-                    ha="center",
-                    va="center",
-                    transform=ax.transAxes,
-                    fontsize=9,
-                    color="gray",
-                )
-                ax.set_axis_off()
-                continue
-
-            sns.heatmap(
-                matrix,
-                ax=ax,
-                cmap=_SHAP_CMAP,
-                norm=norm,
-                annot=True,
-                fmt=".3f",
-                annot_kws={"size": 7.5},
-                linewidths=0.4,
-                linecolor="#cccccc",
-                cbar=False,
-                mask=matrix.isna(),
-            )
-
-            ax.set_title(
-                SAMPLE_META[sample]["label"].replace("\n", " "),
-                fontsize=11,
-            )
-            ax.set_xlabel("Segment position", fontsize=10)
-            ax.set_ylabel("Change-point pattern" if c == 0 else "", fontsize=10)
-            ax.tick_params(axis="x", rotation=0, labelsize=8)
-            ax.tick_params(axis="y", rotation=0, labelsize=7.5)
-
-        # ── shared colorbar ────────────────────────────────────────────
-        sm = ScalarMappable(
-            cmap=_SHAP_CMAP,
-            norm=Normalize(vmin=-vmax, vmax=vmax),
-        )
-        sm.set_array([])
-        fig.tight_layout()
-        fig.subplots_adjust(right=0.88)
-        cax = fig.add_axes([0.90, 0.15, 0.015, 0.68])
-        cbar = fig.colorbar(sm, cax=cax, orientation="vertical")
-        cbar.set_label("Mean SHAP value", fontsize=9)
-        cbar.ax.tick_params(labelsize=8)
-
-        fig.suptitle(
-            f"Most frequent segment patterns — cohort: {cohort}  (top {top_n})",
-            fontsize=13,
-            y=1.01,
-        )
-
-        if output_path:
-            base, ext = osp.splitext(output_path)
-            path = f"{base}_{cohort}{ext}"
-            fig.savefig(path, dpi=150, bbox_inches="tight")
-            print(f"Saved → {path}")
-
-        figs.append(fig)
-
-    return figs
-
-
-# ── Activity-segment tile chart ────────────────────────────────────────────────
-
-
-def _build_sample_segment_summary(
-    sv_list: list,
-    cases_list: list,
-    activity_lookup: dict,
-) -> Tuple[tuple, int, pd.DataFrame]:
-    """For the most common change-point pattern in *sample*, compute the most
-    frequent activity and its proportion for every segment position.
-
-    Returns
-    -------
-    pattern  : tuple of change-point indices (the most common pattern)
-    n_traces : number of traces that share this pattern
-    summary  : DataFrame indexed by seg_idx with columns
-               ['top_activity', 'proportion']
-    """
-    patterns = [_change_points(sv["segment_ids"]) for sv in sv_list]
-    pattern_counts = Counter(patterns)
-    pattern = pattern_counts.most_common(1)[0][0]
-    n_traces = pattern_counts[pattern]
-
-    # Collect every (segment_position → activity name) occurrence
-    seg_activities: Dict[int, List[str]] = defaultdict(list)
-    for trace_id, sv_dict in enumerate(sv_list):
-        if _change_points(sv_dict["segment_ids"]) != pattern:
-            continue
-        case = cases_list[trace_id]  # shape (1, prefix_len, n_features)
-        for seg_idx, event_indices in enumerate(sv_dict["segment_ids"]):
-            for event_idx in event_indices:
-                act_code = int(case[0, event_idx, 0])
-                act_name = activity_lookup.get(act_code, f"#{act_code}")
-                seg_activities[seg_idx].append(act_name)
-
-    rows = []
-    for seg_idx in sorted(seg_activities):
-        acts = seg_activities[seg_idx]
-        top_act, top_count = Counter(acts).most_common(1)[0]
-        rows.append(
-            {
-                "seg_idx": seg_idx,
-                "top_activity": top_act,
-                "proportion": top_count / len(acts),
-            }
-        )
-
-    return pattern, n_traces, pd.DataFrame(rows).set_index("seg_idx")
-
-
-def plot_activity_segment_tile(
-    explicands_info: Dict,
-    activity_lookup: dict,
-    cohort: str = "short",
-    output_path: str = "",
-) -> Figure:
-    """Tile chart: rows = prediction outcomes (TP/FP/FN/TN),
-    columns = segment positions.
-
-    Each cell shows the most frequent activity in that segment (for traces
-    whose segmentation matches the most common change-point pattern of that
-    outcome group).  Cell colour encodes the proportion of events in that
-    segment that are the top activity; the activity name is printed inside
-    the cell.
-
-    Parameters
-    ----------
-    explicands_info : dict
-        Loaded from pickle; keyed by sample name (tp/fp/fn/tn).
-    activity_lookup : dict
-        Maps encoded integer → activity name string
-        (``test_loader.dataset.log.itos["activity"]``).
-    cohort : str
-        Label used only in the figure title.
-    output_path : str
-        If non-empty the figure is saved to this path.
-    """
-    samples = [s for s in SAMPLE_NAMES if s in explicands_info]
-
-    # ── 1. Per-sample summaries ─────────────────────────────────────
-    sample_data: Dict[str, Tuple[tuple, int, pd.DataFrame]] = {}
-    max_seg_idx = 0
-    for sample in samples:
-        pattern, n_traces, summary = _build_sample_segment_summary(
-            explicands_info[sample].get("sv", []),
-            explicands_info[sample].get("cases", []),
-            activity_lookup,
-        )
-        sample_data[sample] = (pattern, n_traces, summary)
-        if not summary.empty:
-            max_seg_idx = max(max_seg_idx, int(summary.index.max()))
-
-    n_segs = max_seg_idx + 1
-    col_labels = [f"seg {i + 1}" for i in range(n_segs)]
-
-    # ── 2. Build proportion & annotation matrices ───────────────────
-    prop_matrix = pd.DataFrame(np.nan, index=samples, columns=col_labels)
-    annot_matrix = pd.DataFrame("", index=samples, columns=col_labels)
-
-    for sample in samples:
-        pattern, n_traces, summary = sample_data[sample]
-        props = {int(k): float(v) for k, v in summary["proportion"].items()}  # type: ignore[arg-type]
-        acts = {int(k): str(v) for k, v in summary["top_activity"].items()}  # type: ignore[arg-type]
-        for seg_idx, proportion in props.items():
-            col = f"seg {seg_idx + 1}"
-            act = acts[seg_idx]
-            act_short = act[:20] + "…" if len(act) > 20 else act
-            prop_matrix.loc[sample, col] = proportion
-            annot_matrix.loc[sample, col] = f"{act_short}\n{proportion:.0%}"
-
-    # ── 3. Build readable row labels ────────────────────────────────
-    row_labels = []
-    for sample in samples:
-        pattern, n_traces, _ = sample_data[sample]
-        cp_str = ", ".join(str(c) for c in pattern) if pattern else "—"
-        meta = SAMPLE_META[sample]["label"].replace("\n", " ")
-        row_labels.append(f"{meta}\n[{cp_str}]  n={n_traces}")
-    prop_matrix.index = row_labels
-    annot_matrix.index = row_labels
-
-    # ── 4. Plot ─────────────────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(max(6, 2.8 * n_segs + 2), 1.8 * len(samples) + 1.5))
-
-    sns.heatmap(
-        prop_matrix.astype(float),
-        ax=ax,
-        cmap="Blues",
-        vmin=0.0,
-        vmax=1.0,
-        annot=annot_matrix.values,
-        fmt="",
-        annot_kws={"size": 8},
-        linewidths=0.5,
-        linecolor="#cccccc",
-        cbar_kws={"label": "Proportion of top activity\n(among events in segment)"},
-        mask=prop_matrix.isna(),
-    )
-
-    ax.set_title(
-        f"Most frequent activity per segment — cohort: {cohort}",
-        fontsize=12,
-        pad=10,
-    )
-    ax.set_xlabel("Segment position", fontsize=10)
-    ax.set_ylabel("Prediction outcome  [pattern]", fontsize=10)
-    ax.tick_params(axis="x", rotation=0, labelsize=9)
-    ax.tick_params(axis="y", rotation=0, labelsize=8)
-
-    fig.tight_layout()
-
-    if output_path:
-        fig.savefig(output_path, dpi=150, bbox_inches="tight")
-        print(f"Saved → {output_path}")
-
-    return fig
-
-
-# ── Individual-trace strip chart ───────────────────────────────────────────────
+# ── Individual-trace chart ───────────────────────────────────────────────
 
 
 def plot_individual_traces(
@@ -757,7 +404,7 @@ def print_segment_stats_latex(
 
 
 def main():
-    # ── 2. Load activity vocabulary once ────────────────────────────
+    # ── 1. Load activity vocabulary once ────────────────────────────
     print("=" * 80)
     print("Loading model & vocabulary for activity decoding")
     print("=" * 80)
@@ -774,13 +421,57 @@ def main():
     for strategy in SEG_STRATEGIES:
         explicands_per_strategy[strategy] = {}
         for cohort in COHORT_ORDER:
-            print(f"[*] Loading '{strategy}' explanations — cohort '{cohort.upper()}'")
+            print(f" [*] Loading '{strategy}' explanations — cohort '{cohort.upper()}'")
             sv_cohort_dir = osp.join(sv_output_dir, f"{strategy}_cohort_{cohort}")
             explicands_per_strategy[strategy][cohort] = {}
             for name in SAMPLE_NAMES:
                 pkl_path = osp.join(sv_cohort_dir, f"{name}_segment_sv_results.pkl")
                 with open(pkl_path, "rb") as f:
                     explicands_per_strategy[strategy][cohort][name] = pickle.load(f)
+
+    # ── 2. Evaluate entropic relevance ────────────────────────────
+    print("\n" + "=" * 80)
+    print("Entropic Relevance (normalised) — full traces vs. segments")
+    print("-" * 80)
+    strategy = "transition"
+
+    all_cases = []
+    for _, item in explicands_per_strategy[strategy]['medium'].items():
+        all_cases.extend(item['cases'])
+    full_log_er = compute_er_full(all_cases)
+    print("Full log normalized ER: ", full_log_er)
+
+
+    for strategy, cohort_data in explicands_per_strategy.items():
+        
+        case_segments = []
+        
+        for _, sample_data in cohort_data.items():
+            for sample in SAMPLE_NAMES:
+                segments_info = sample_data[sample]['segments']
+                segments = [item['segments'] for item in segments_info]
+                case_segments.extend(segments)
+
+        print(
+            f"Normalized ER for segmentation '{strategy}':", compute_er_segments(case_segments) 
+        )
+
+    print(f"{'Strategy':<14} {'Sample':<8} {'ER full':>10} {'ER segs':>10}")
+    for cohort, sample_data in explicands_per_strategy[strategy].items():
+
+        for sample in SAMPLE_NAMES:
+            info = sample_data.get(sample, {})
+            sv_list = info.get("sv", [])
+            cases_list = info.get("cases", [])
+            if not sv_list:
+                continue
+            er_full, er_seg = compute_er_full_and_segments(
+                sv_list, cases_list, normalized=True
+            )
+            print(
+                f"{strategy:<14} {sample.upper():<8} {er_full:>10.4f} {er_seg:>10.4f}"
+            )
+    print("=" * 80 + "\n")
 
     # ── 3. Individual-trace strip charts ────────────────────────────
     vis_dir = osp.join(OUTPUT_ROOT, "figures", ds_name, "sv_patterns", "seg_comparison")
@@ -812,7 +503,7 @@ def main():
             output_path=osp.join(
                 sv_output_dir,
                 f"{strategy}_cohort_{cohort}",
-                f"{ds_name}_{}_seg_stats.tex",
+                f"{ds_name}_{strategy}_seg_stats.tex",
             ),
         )
 

@@ -4,8 +4,8 @@
 --device=cpu
 --backbone=rnn
 --rnn_type=lstm
---hidden_size=128
---embedding_size=32  
+--hidden_size=64
+--embedding_size=64  
 --n_layers=1  
 --batch_size=1 
 --strategy=concat

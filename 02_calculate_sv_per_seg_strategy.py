@@ -34,14 +34,18 @@ from timeshap.wrappers.outcome_predictor_wrapper import OutcomePredictorWrapper
 
 SAMPLE_NAMES = ["tp", "fp", "fn", "tn"]
 
-SEG_STRATEGIES = ["per_event", "distribution", "transition"]
-PREFIX_LEN = 10  # 30
+SEG_STRATEGIES = ["random"]
+# SEG_STRATEGIES = ["per_event", "distribution", "transition"]
+PREFIX_LEN = 30
+# PREFIX_LEN = 15
+MODEL_CONFIDENCE_THRESHOLD = 0.7
 
 PROJECT_DIR = r"D:\PycharmProjects\xAI-PPM"
 OUTPUT_ROOT = osp.join(PROJECT_DIR, r"outputs")
-config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op_sepsis.txt")
-# checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\BPI17_rnn_outcome_bpi17.pth")
-checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\Sepsis_rnn_outcome_sepsis.pth")
+config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op.txt")
+# config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op_sepsis.txt")
+checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\BPI17_rnn_outcome_bpi17.pth")
+# checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\rnn_outcome_sepsis.pth")
 
 
 def main():
@@ -52,10 +56,10 @@ def main():
     config, train_loader, test_loader, model = load_data_and_model(
         config_path, checkpoint_path
     )
-    # calculate_accuracy(model, test_loader, device=config["device"])
-    # calculate_accuracy_per_position(model, test_loader, device=config["device"], 
-    #                                 save_path=r'D:\PycharmProjects\xAI-PPM\accuracy_per_position_sepsis.png')
-    # calculate_auc(model, test_loader, config["device"])
+    calculate_accuracy(model, test_loader, device=config["device"])
+    calculate_accuracy_per_position(model, test_loader, device=config["device"], 
+                                    save_path=r'D:\PycharmProjects\xAI-PPM\accuracy_per_position_sepsis.png')
+    calculate_auc(model, test_loader, config["device"])
 
     ds_name = config["dataset"].lower()
 
@@ -102,9 +106,9 @@ def main():
         )
     elif ds_name == "sepsis":
         print(
-            "Return ER:",
+            "No Return ER",
             class_ratio[0].round(4),
-            "| No Return ER",
+            "| Return ER:",
             class_ratio[1].round(4),
         )
 
@@ -116,7 +120,7 @@ def main():
         red_test_loader,
         prefix_len=PREFIX_LEN,
         explicands_num=None,
-        threshold=0.6,
+        threshold=MODEL_CONFIDENCE_THRESHOLD,
         one_offer_cases=False,
     )
 
@@ -133,12 +137,13 @@ def main():
             "timestamp": test_loader.dataset.timestamps,
         },
         "per_event": {},
-        "random": {"num_change_points": 9, "seed": 42},
+        "random": {"num_change_points": 8, "seed": 32},
     }
 
     for seg_strategy in SEG_STRATEGIES:
+        random_seed =  seg_strategy_kwargs['random']['seed']
         sv_output_dir = osp.join(
-            OUTPUT_ROOT, "shap_values", ds_name, f"{seg_strategy}_cohort_medium"
+            OUTPUT_ROOT, "shap_values", ds_name, f"{seg_strategy}_cohort_medium_seed{random_seed}"
         )
 
         for name in SAMPLE_NAMES:

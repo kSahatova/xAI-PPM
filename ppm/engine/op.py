@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 from torch.optim import Optimizer
 from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
+from focal_loss.focal_loss import FocalLoss
 
 from tqdm import tqdm
 
@@ -37,6 +38,8 @@ def train_step(
     }
     total_targets=0
     valid_positions = {}
+    gamma=0.7
+
     for batch, items in enumerate(data_loader):
         x_cat, x_num, y_cat, y_num = items
         x_cat, x_num, y_cat, y_num = (
@@ -59,6 +62,16 @@ def train_step(
             y_cat.squeeze(-1)[attention_mask.bool()].to(torch.float),
             reduction="sum",
         )
+        # Manual focal loss implementation
+        # bce = F.binary_cross_entropy(
+        #     out.squeeze(-1)[attention_mask.bool()],
+        #     y_cat.squeeze(-1)[attention_mask.bool()].to(torch.float),
+        #     reduction="sum",
+        # )
+        # p_t = torch.exp(-bce)
+        # loss = (1 - p_t) ** gamma * bce
+        # loss = loss.sum()
+
         predictions = ((out.squeeze(-1)) > 0.5).float()
         acc = (predictions.squeeze(-1)[attention_mask.bool()] == y_cat.squeeze(-1)[attention_mask.bool()]).sum().item()
 
@@ -233,10 +246,10 @@ def train_engine(
                 save_checkpoint(
                     checkpoint_dir=config["checkpoint_dir"],
                     checkpoint=cpkt,
-                    experiment_id="{}_{}_{}_{}".format(config["backbone"], 
+                    experiment_id="{}_{}_{}".format(config["backbone"], 
                                                        config["categorical_targets"][0],
-                                                       config["log"].lower(),
-                                                       str(uuid.uuid4())[:8].replace("-", "")),
+                                                       config["log"].lower(),)
+                                                    #    str(uuid.uuid4())[:8].replace("-", "")),
                 )
 
         if activity_loss < best_loss:

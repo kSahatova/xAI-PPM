@@ -282,3 +282,4 @@ def plot_transition_matrix(transition_matrix):
     ax.set_xlabel("Next event")
     ax.set_ylabel("Current event")
     plt.show()
+
