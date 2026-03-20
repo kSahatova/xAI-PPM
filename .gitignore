@@ -11,8 +11,10 @@ outputs
 xai_ppm
 persisted_models
 preprocessing
+04_correlation_sv_length.py
 06_segments_label_relation.py
 lempel_ziv_segmentation.ipynb
 trace_segmentation_test.ipynb
+train_lstm_bpi15_phase_level.py
 xai_utils/trace_segmentation/information_gain_based.py
 local_xai/utils/trace_segmentation/utils.py

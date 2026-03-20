@@ -6,8 +6,8 @@ from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
-from local_xai.seqshap import (
-    SeqShapKernel,
+from local_xai.segshap import (
+    SegShapKernel,
     plot_segment_level_sv,
 )
 
@@ -22,7 +22,7 @@ def _shap_one_case(
     save_plots: bool,
 ) -> tuple[int, Dict[str, Any]]:
     seg_ids = seg_info["segment_ids"]
-    seg_explainer = SeqShapKernel(
+    seg_explainer = SegShapKernel(
         fetching_f, baseline, rs=52, mode="segment", segment_ids=seg_ids,
     )
     seg_sv = seg_explainer.shap_values(case)

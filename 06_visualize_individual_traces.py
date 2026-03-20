@@ -44,8 +44,10 @@ OUTPUT_ROOT = osp.join(PROJECT_DIR, r"outputs")
 
 # config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op_sepsis.txt")
 config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op.txt")
+# config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op_bpi15.txt")
 # checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\Sepsis_rnn_outcome_sepsis.pth")
 checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\BPI17_rnn_outcome_bpi17.pth")
+# checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\rnn_outcome_bpi15_1.pth")
 
 SAMPLE_META = {
     "tp": dict(label="TP\n(cancelled, correct)", color="#3D7AACB6"),
@@ -54,11 +56,8 @@ SAMPLE_META = {
     "tn": dict(label="TN\n(accepted, correct)", color="#3E8540B6"),
 }
 
-# SEG_STRATEGIES = ["random", ]
-SEG_STRATEGIES = ["per_event","random", "distribution", "transition"]
-
-COHORT_ORDER = ["medium"]
-# COHORT_ORDER = ["short", "medium", "long"]
+SEG_STRATEGIES = ["transition"]
+# SEG_STRATEGIES = ["per_event", "distribution", "transition"]
 
 _SHAP_CMAP = LinearSegmentedColormap.from_list(
     "shap_red_blue",
@@ -107,9 +106,10 @@ def plot_individual_traces(
     explicands_info: Dict,
     activity_lookup: dict,
     sample: str,
-    cohort: str = "short",
     n_cases: int = 10,
     pattern_type: str = "positional",
+    truncate_start: int = 0,
+    truncate_end: int = 0,
     output_path: str = "",
 ) -> Figure:
     """Draw individual traces as per-event cell strips (one cell = one event).
@@ -125,6 +125,12 @@ def plot_individual_traces(
         - "positional" : by the tuple of change-point *positions* (default)
         - "activity"   : by the tuple of (from_act, to_act) pairs at each
                          segment boundary — position-invariant grouping
+    truncate_start : int
+        Number of events to drop from the beginning of each trace (default 0).
+    truncate_end : int
+        Number of events to drop from the end of each trace (default 0).
+        Together these two parameters let you zoom into the middle of long
+        traces so that activity labels in the cells can be displayed larger.
     """
     sv_list = explicands_info[sample].get("sv", [])
     cases_list = explicands_info[sample].get("cases", [])
@@ -189,10 +195,18 @@ def plot_individual_traces(
     gap = 0.3  # vertical gap between rows
     n = len(selected)
 
-    trace_len = max(sv_dict["segment_ids"][-1][-1] + 1 for _, sv_dict, *_ in selected)
+    trace_len = max(
+        max(sv_dict["segment_ids"][-1][-1] + 1 - truncate_start - truncate_end, 0)
+        for _, sv_dict, *_ in selected
+    )
+
+    # Scale cell label font with available width per cell
+    fig_w = max(14, trace_len * 0.6 + 4)
+    pts_per_cell = fig_w / max(trace_len, 1) * 72  # 72 pt/inch
+    cell_font_size = min(max(int(pts_per_cell * 0.18), 9), 22)
 
     fig, ax = plt.subplots(
-        figsize=(max(14, trace_len * 0.6 + 4), n * (row_h + gap) + 2.0),
+        figsize=(fig_w, n * (row_h + gap) + 2.0),
         facecolor="white",
     )
     ax.set_facecolor("white")
@@ -213,47 +227,51 @@ def plot_individual_traces(
 
         # One coloured cell per event; show integer activity code
         row_trace_len = seg_ids[-1][-1] + 1
-        for event_idx in range(row_trace_len):
+        vis_end = row_trace_len - truncate_end  # exclusive upper bound
+        for event_idx in range(truncate_start, vis_end):
+            display_x = (event_idx - truncate_start) * cell_w
             color = event_color.get(event_idx, (0.85, 0.85, 0.85, 1.0))
-            ax.add_patch(
-                mpatches.Rectangle(
-                    (event_idx * cell_w, y0),
-                    cell_w,
-                    row_h,
-                    facecolor=color,
-                    edgecolor="none",
-                    linewidth=0,
-                    zorder=2,
-                )
+            rect = mpatches.Rectangle(
+                (display_x, y0),
+                cell_w,
+                row_h,
+                facecolor=color,
+                edgecolor="none",
+                linewidth=0,
+                zorder=2,
             )
+            ax.add_patch(rect)
             act_code = int(case[0, event_idx, 0])
             act_name = activity_lookup.get(act_code, f"#{act_code}")
             r, g, b, _ = color
             txt_color = (
                 "black" if (0.299 * r + 0.587 * g + 0.114 * b) > 0.55 else "white"
             )
-            ax.text(
-                event_idx * cell_w + cell_w / 2,
+            txt = ax.text(
+                display_x + cell_w / 2,
                 y0 + row_h / 2,
                 act_name,
                 ha="center",
                 va="center",
-                fontsize=9,
+                fontsize=cell_font_size,
                 rotation=90,
                 color=txt_color,
                 clip_on=True,
                 zorder=3,
             )
+            txt.set_clip_path(rect)  # type: ignore[arg-type]
 
-        # Segment boundary lines — always positional regardless of pattern_type
+        # Segment boundary lines — only those inside the visible window
         for cp in _change_points(seg_ids):
-            ax.plot(
-                [cp * cell_w, cp * cell_w],
-                [y0, y0 + row_h],
-                color="#222222",
-                linewidth=2.0,
-                zorder=4,
-            )
+            if truncate_start < cp < vis_end:
+                display_cp = (cp - truncate_start) * cell_w
+                ax.plot(
+                    [display_cp, display_cp],
+                    [y0, y0 + row_h],
+                    color="#222222",
+                    linewidth=2.0,
+                    zorder=4,
+                )
 
         # Row label
         if pattern_type == "activity":
@@ -272,14 +290,22 @@ def plot_individual_traces(
         )
 
     # ── 5. Axes ───────────────────────────────────────────────────────
-    # x-ticks every 5 events, 1-indexed, at left edge of each labelled cell
-    tick_positions = np.arange(0, trace_len)
-    # ax.set_xlim(-5.0, trace_len * cell_w)
+    # x-ticks: display positions map back to original 1-indexed event numbers
+    tick_display = np.arange(0, trace_len)
+    left_margin = 0.0 if truncate_start > 0 else -5.0
+    ax.set_xlim(left_margin, trace_len * cell_w)
     ax.set_ylim(-0.5, n * (row_h + gap) + 0.3)
-    ax.set_xticks([i * cell_w + 0.5 for i in tick_positions])
-    ax.set_xticklabels(tick_positions + 1, fontsize=19)
+    ax.set_xticks([i * cell_w + 0.5 for i in tick_display])
     ax.set_xlabel("Event position", fontsize=21, labelpad=6)
+    ax.set_xticklabels(tick_display + truncate_start + 1, fontsize=19)
+    # Centre the x-axis label over the cell data (0 … trace_len), not the full xlim
+    xlim_l, xlim_r = left_margin, trace_len * cell_w
+    label_x = (trace_len * cell_w / 2 - xlim_l) / (xlim_r - xlim_l)
+    ax.xaxis.set_label_coords(label_x, -0.06)
+    # ax.set_xticks([])
     ax.set_yticks([])
+    # ax.tick_params(which="both", top=False, bottom=True, left=False, right=False)
+    ax.grid(False)
     for spine in ax.spines.values():
         spine.set_visible(False)
 
@@ -417,68 +443,54 @@ def main():
     explicands_per_strategy: Dict[str, Dict[str, Dict]] = {}
 
     sv_output_dir = osp.join(OUTPUT_ROOT, "shap_values", ds_name)
+    cohort = 'medium'
+
 
     for strategy in SEG_STRATEGIES:
         explicands_per_strategy[strategy] = {}
-        for cohort in COHORT_ORDER:
-            print(f" [*] Loading '{strategy}' explanations — cohort '{cohort.upper()}'")
-            sv_cohort_dir = osp.join(sv_output_dir, f"{strategy}_cohort_{cohort}")
-            explicands_per_strategy[strategy][cohort] = {}
-            for name in SAMPLE_NAMES:
-                pkl_path = osp.join(sv_cohort_dir, f"{name}_segment_sv_results.pkl")
-                with open(pkl_path, "rb") as f:
-                    explicands_per_strategy[strategy][cohort][name] = pickle.load(f)
+        print(f" [*] Loading '{strategy}' explanations — cohort '{cohort.upper()}'")
+        sv_strategy_dir = osp.join(sv_output_dir, f'{strategy}_cohort_{cohort}')
+        explicands_per_strategy[strategy][cohort] = {}
+        for name in SAMPLE_NAMES:
+            pkl_path = osp.join(sv_strategy_dir, f"{name}_segment_sv_results.pkl")
+            with open(pkl_path, "rb") as f:
+                explicands_per_strategy[strategy][cohort][name] = pickle.load(f)
 
     # ── 2. Evaluate entropic relevance ────────────────────────────
     print("\n" + "=" * 80)
-    print("Entropic Relevance (normalised) — full traces vs. segments")
+    print("Entropic Relevance — full traces vs. segments")
     print("-" * 80)
-    # strategy = "transition"
+    strategy = "transition"
 
-    # all_cases = []
-    # for _, item in explicands_per_strategy[strategy]['medium'].items():
-    #     all_cases.extend(item['cases'])
-    # full_log_er, full_log_er_std = compute_er_full(all_cases)
-    # print(f"Full log normalized ER: {full_log_er} ({full_log_er_std})")
+    all_cases = []
+    for _, item in explicands_per_strategy[strategy]['medium'].items():
+        all_cases.extend(item['cases'])
+    full_log_er, full_log_er_std = compute_er_full(all_cases, normalized=False)
+    print(f"ER of the full log: {full_log_er} ({full_log_er_std})")
 
 
-    # for strategy, cohort_data in explicands_per_strategy.items():
+    for strategy, cohort_data in explicands_per_strategy.items():
         
-    #     case_segments = []
+        case_segments = []
         
-    #     for _, sample_data in cohort_data.items():
-    #         for sample in SAMPLE_NAMES:
-    #             segments_info = sample_data[sample]['segments']
-    #             segments = [item['segments'] for item in segments_info]
-    #             case_segments.extend(segments)
+        for _, sample_data in cohort_data.items():
+            for sample in SAMPLE_NAMES:
+                segments_info = sample_data[sample]['segments']
+                segments = [item['segments'] for item in segments_info]
+                case_segments.extend(segments)
 
-    #     seg_er, seg_er_std = compute_er_segments(case_segments) 
-    #     print(
-    #         f"Normalized ER for segmentation '{strategy}': {seg_er}, ({seg_er_std})", 
-    #     )
+        seg_er, seg_er_std = compute_er_segments(case_segments, normalized=False) 
+        print(
+            f"ER of the segmented log '{strategy}': {seg_er}, ({seg_er_std})", 
+        )
 
-    # print(f"{'Strategy':<14} {'Sample':<8} {'ER full':>10} {'ER segs':>10}")
-    # for cohort, sample_data in explicands_per_strategy[strategy].items():
-
-    #     for sample in SAMPLE_NAMES:
-    #         info = sample_data.get(sample, {})
-    #         sv_list = info.get("sv", [])
-    #         cases_list = info.get("cases", [])
-    #         if not sv_list:
-    #             continue
-    #         er_full, er_seg = compute_er_full_and_segments(
-    #             sv_list, cases_list, normalized=True
-    #         )
-    #         print(
-    #             f"{strategy:<14} {sample.upper():<8} {er_full:>10.4f} {er_seg:>10.4f}"
-    #         )
-    # print("=" * 80 + "\n")
+    print("=" * 80 + "\n")
 
     # ── 3. Individual-trace strip charts ────────────────────────────
-    vis_dir = osp.join(OUTPUT_ROOT, "figures", ds_name, "sv_patterns", "seg_comparison")
+    vis_dir = osp.join(OUTPUT_ROOT, "figures", ds_name, "sv_patterns")
+    # vis_dir = osp.join(OUTPUT_ROOT, "figures", ds_name, "sv_patterns", "seg_comparison")
     os.makedirs(vis_dir, exist_ok=True)
 
-    cohort = COHORT_ORDER[0]
     pattern_type = "activity"
 
     for strategy in SEG_STRATEGIES:
@@ -490,12 +502,13 @@ def main():
                 explicands_per_strategy[strategy][cohort],
                 activity_lookup,
                 sample=sample,
-                cohort=cohort,
-                n_cases=2,
+                n_cases=3,
+                truncate_start=5,
+                truncate_end=5,
                 pattern_type=pattern_type,
                 output_path=osp.join(
                     vis_dir,
-                    f"{cohort}_{strategy}_individual_traces_{sample}_{pattern_type}.png",
+                    f"{cohort}_{strategy}_top3_patterns_{sample}.png",
                 ),
             )
         print_segment_stats_latex(

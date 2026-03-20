@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from skpm import event_logs
 from ppm.datasets import DatasetSchemas
 from ppm.datasets import ContinuousTraces
+from ppm.datasets.labeling import verify_bpi15_ltl_rule
 from ppm.datasets.event_logs import EventFeatures, EventLog, EventTargets
 from ppm.datasets.utils import continuous
 from ppm import models as ppm_models
@@ -16,6 +17,7 @@ from ppm.engine.utils import load_checkpoint
 from ppm.utils import (
     prepare_data,
     prepare_sepsis_data,
+    prepare_bpi15_data,
     prepare_simbank_data,
     get_model_config,
     parse_args,
@@ -62,6 +64,11 @@ def setup_dataloaders(
     elif config["dataset"] == "Sepsis":
         result = prepare_sepsis_data(
             log, NUMERICAL_FEATURES, include_labels=True, return_timestamps=True
+        )
+    # TODO: fix the event log version 
+    elif config["dataset"] == "BPI15_1":
+        result = prepare_bpi15_data(
+            log, NUMERICAL_FEATURES, return_timestamps=True
         )
     else:
         raise ValueError(
@@ -228,15 +235,19 @@ def load_data_and_model(config_path: str, checkpoint_path: str):
         if config["continuous_features"] == "all"
         else config["continuous_features"]
     )
-
-    # TODO: remove this monkey patch (cache_folder)
-    log = getattr(event_logs, config["dataset"])(cache_folder=r'D:\PycharmProjects\xAI-PPM\data')
-    column_schema = getattr(DatasetSchemas, config["dataset"])()
+    
     if config["dataset"] == "BPI17":
+        # TODO: remove this monkey patch (cache_folder)
+        log = getattr(event_logs, config["dataset"])(cache_folder=r'data/')
+        column_schema = getattr(DatasetSchemas, config["dataset"])()
         labeled_df = add_outcome_labels(log.dataframe, column_schema, LABELS_DICT)
         labeled_df = labeled_df[labeled_df["outcome"] != 2]  # drop O_Refused
+        unbiased_split_kwargs = log.unbiased_split_params
 
     elif config["dataset"] == "Sepsis":
+        # TODO: rewrite the dataset loading function
+        log = getattr(event_logs, config["dataset"])(cache_folder=r'data/')
+        column_schema = getattr(DatasetSchemas, config["dataset"])()
         labeled_df = log.dataframe.copy()
         labeled_df = (
             labeled_df.groupby("case:concept:name")
@@ -252,10 +263,27 @@ def load_data_and_model(config_path: str, checkpoint_path: str):
             )
             .reset_index(drop=True)
         )
+        unbiased_split_kwargs = {}
+    
+    elif config["dataset"] == "BPI15_1":
+        name, version = config["dataset"].split("_")
+        log = getattr(event_logs, name)(
+            cache_folder=r"data/"# D:\PycharmProjects\xAI-PPM\data"
+        )
 
-    unbiased_split_kwargs = (
-        log.unbiased_split_params if log.unbiased_split_params is not None else {}
-    )
+        df = log.dataframe.copy()
+        df = df[df["log_version"] == f"BPIC15_{version}"]
+
+        # Apply labeling function to the event log
+        labels = (
+            df.groupby("case:concept:name")["concept:name"]
+            .apply(verify_bpi15_ltl_rule)
+            .rename("outcome")
+        )
+        labeled_df = df.merge(right=labels, on="case:concept:name", how="left")
+        unbiased_split_kwargs = {}
+
+    
     train_loader, test_loader = setup_dataloaders(
         config, labeled_df, unbiased_split_kwargs
     )

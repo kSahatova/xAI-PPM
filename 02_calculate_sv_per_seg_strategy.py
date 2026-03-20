@@ -17,14 +17,14 @@ from ppm.utils import (
     calculate_accuracy_per_position,
     extract_explicands_samples,
     calculate_accuracy,
-    calculate_auc
+    calculate_auc,
 )
 
 from local_xai.utils.trace_segmentation.segmentation_factory import (
     apply_segmenter_parallel,
 )
 from local_xai.utils.trace_segmentation.transition_based import build_transition_matrix
-from local_xai.seqshap.calulate_seqshap_parallel import (
+from local_xai.segshap.calulate_segshap_parallel import (
     compute_segment_shap_values_parallel,
 )
 from local_xai.utils.baseline_calculation import build_average_event_baseline
@@ -34,18 +34,20 @@ from timeshap.wrappers.outcome_predictor_wrapper import OutcomePredictorWrapper
 
 SAMPLE_NAMES = ["tp", "fp", "fn", "tn"]
 
-SEG_STRATEGIES = ["random"]
-# SEG_STRATEGIES = ["per_event", "random", "distribution", "transition"]
+# SEG_STRATEGIES = ["distribution"]
+SEG_STRATEGIES = ["per_event", "distribution", "transition"]
 PREFIX_LEN = 30
 # PREFIX_LEN = 15
 MODEL_CONFIDENCE_THRESHOLD = 0.7
 
 PROJECT_DIR = r"D:\PycharmProjects\xAI-PPM"
 OUTPUT_ROOT = osp.join(PROJECT_DIR, r"outputs")
-config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op.txt")
+config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op_bpi15.txt")
+# config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op.txt")
 # config_path = osp.join(PROJECT_DIR, r"configs\explain_lstm_args_for_op_sepsis.txt")
-checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\BPI17_rnn_outcome_bpi17.pth")
-# checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\rnn_outcome_sepsis.pth")
+checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\rnn_outcome_bpi15_1.pth")
+# checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\BPI17_rnn_outcome_bpi17.pth")
+# checkpoint_path = osp.join(OUTPUT_ROOT, r"checkpoints\Sepsis_rnn_outcome_sepsis1.pth")
 
 
 def main():
@@ -56,12 +58,16 @@ def main():
     config, train_loader, test_loader, model = load_data_and_model(
         config_path, checkpoint_path
     )
-    calculate_accuracy(model, test_loader, device=config["device"])
-    calculate_accuracy_per_position(model, test_loader, device=config["device"], 
-                                    save_path=r'D:\PycharmProjects\xAI-PPM\accuracy_per_position_sepsis.png')
-    calculate_auc(model, test_loader, config["device"])
-
     ds_name = config["dataset"].lower()
+
+    # calculate_accuracy(model, test_loader, device=config["device"])
+    # calculate_accuracy_per_position(
+    #     model,
+    #     test_loader,
+    #     device=config["device"],
+    #     save_path=osp.join(OUTPUT_ROOT, f"accuracy_per_position_{ds_name}.png"),
+    # )
+    calculate_auc(model, test_loader, config["device"])
 
     train_df = train_loader.dataset.log.dataframe
     unique_activities_num = train_df["activity"].nunique()
@@ -133,7 +139,7 @@ def main():
         "distribution": {
             "min_window_size": 3,
             "max_window_size": 5,
-            "m": 5,  # measuring window,
+            "m": 2,  # measuring window,
             "timestamp": test_loader.dataset.timestamps,
         },
         "per_event": {},

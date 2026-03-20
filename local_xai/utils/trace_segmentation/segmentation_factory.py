@@ -382,7 +382,7 @@ def apply_segmenter_parallel(mode: str, cases, n_workers=None, **kwargs) -> list
     from concurrent.futures import ProcessPoolExecutor, as_completed
     from tqdm import tqdm
 
-    args_list = [(mode, kwargs, i, case) for i, case in enumerate(cases)]
+    args_list = [(mode, kwargs, i, np.array(case)) for i, case in enumerate(cases)]
     results: List[Optional[SegmentResult]] = [None] * len(args_list)
 
     with ProcessPoolExecutor(max_workers=n_workers) as executor:

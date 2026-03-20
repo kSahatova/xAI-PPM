@@ -1,13 +1,13 @@
-from .seqshap_kernel import SeqShapKernel
+from .segshap_kernel import SegShapKernel
 from .plots import (
     plot_segment_shap_heatmap,
     plot_segment_level_sv,
     plot_feature_level_sv,
 )
-from .calulate_seqshap_parallel import compute_segment_shap_values_parallel
+from .calulate_segshap_parallel import compute_segment_shap_values_parallel
 
 __all__ = [
-    "SeqShapKernel",
+    "SegShapKernel",
     "plot_segment_shap_heatmap",
     "plot_segment_level_sv",
     "plot_feature_level_sv",

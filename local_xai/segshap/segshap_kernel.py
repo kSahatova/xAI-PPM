@@ -30,7 +30,7 @@ from .utils import match_seq_model_to_data, convert_to_data, match_instance_to_d
 log = logging.getLogger("shap")
     
 
-class SeqShapKernel(KernelExplainer):
+class SegShapKernel(KernelExplainer):
     """
 
     Parameters

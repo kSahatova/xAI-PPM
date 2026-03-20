@@ -20,7 +20,7 @@ from local_xai.utils.trace_segmentation.transition_based import build_transition
 from local_xai.utils.trace_segmentation.transition_based import (
     calculate_and_plot_segments_parallel,
 )
-from local_xai.seqshap.calulate_seqshap_parallel import (
+from local_xai.segshap.calulate_segshap_parallel import (
     compute_segment_shap_values_parallel,
 )
 from local_xai.utils.baseline_calculation import build_average_event_baseline
@@ -166,10 +166,19 @@ def plot_trace_length_distribution(
 
     sns.histplot(traces_len, bins=40, kde=True, color="#4C72B0", alpha=0.55, ax=ax)
 
-    ax.axvline(Q1, color="#E04B3A", linestyle="--", linewidth=1.5, label=f"Q5  = {Q1:.0f}")
-    ax.axvline(Q3, color="#2CA02C", linestyle="--", linewidth=1.5, label=f"Q95 = {Q3:.0f}")
-    ax.axvline(traces_len.median(), color="orange", linestyle=":", linewidth=1.5,
-               label=f"median = {traces_len.median():.0f}")
+    ax.axvline(
+        Q1, color="#E04B3A", linestyle="--", linewidth=1.5, label=f"Q5  = {Q1:.0f}"
+    )
+    ax.axvline(
+        Q3, color="#2CA02C", linestyle="--", linewidth=1.5, label=f"Q95 = {Q3:.0f}"
+    )
+    ax.axvline(
+        traces_len.median(),
+        color="orange",
+        linestyle=":",
+        linewidth=1.5,
+        label=f"median = {traces_len.median():.0f}",
+    )
 
     ax.set_xlabel("Trace length (# events)", fontsize=12)
     ax.set_ylabel("Count", fontsize=12)
@@ -220,7 +229,9 @@ def main():
         traces_len,
         Q1,
         Q3,
-        output_path=osp.join(OUTPUT_ROOT, "segmentation", "bpi17", "trace_length_distribution.png"),
+        output_path=osp.join(
+            OUTPUT_ROOT, "segmentation", "bpi17", "trace_length_distribution.png"
+        ),
     )
     plt.show()
 
@@ -229,7 +240,9 @@ def main():
         test_df,
         Q1,
         Q3,
-        output_path=osp.join(OUTPUT_ROOT, "segmentation", "bpi17", "cohort_length_boxplots.png"),
+        output_path=osp.join(
+            OUTPUT_ROOT, "segmentation", "bpi17", "cohort_length_boxplots.png"
+        ),
     )
     plt.show()
 
@@ -309,7 +322,7 @@ def main():
                 config,
                 output_dir=sv_output_dir,
                 save_plots=False,
-                n_workers=9
+                n_workers=9,
             )
             explicands_info[name]["sv"] = sv_results
 

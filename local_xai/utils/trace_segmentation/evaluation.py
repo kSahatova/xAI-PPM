@@ -122,15 +122,50 @@ def get_ER(variant_log, activity_counts, edge_counts):
     - float: The ER value for the given variant log, activity counts, and edge counts.
     """
     ER_sum = 0.0
+    ER_list = []
     total_occurences = 0
+    num_traces_w_low_p  = 0
+
+    for variant, occurrence in variant_log.items():
+        prob = get_probability(activity_counts, edge_counts, variant)
+        #use this for the logs where probabilities get too small
+        # if prob < 1e-30:
+        #     num_traces_w_low_p += 1
+        # prob = max(prob, 1e-30)
+        
+        er_trace = -math.log(prob, 2)
+        ER_sum += er_trace * occurrence
+        total_occurences += occurrence
+        ER_list.extend([er_trace] * occurrence)
+
+    ER = ER_sum/total_occurences
+    
+    variance = sum((er - ER) ** 2 for er in ER_list) / total_occurences
+    ER_std = math.sqrt(variance)
+
+    return ER, ER_std
+
+
+def get_ER_sum(variant_log, activity_counts, edge_counts):
+    """
+    Calculate the Entropic Relevance (ER) value for a given variant log, activity counts, and edge counts (last two together dfg).
+    #! This is the total ER over all traces in the log
+
+    Parameters:
+    - variant_log (dict): A dictionary where the keys are variants (sequences of activities) and the values are the occurrences of each variant in the log.
+    - activity_counts (dict): A dictionary containing the counts of each activity in the graph.
+    - edge_counts (dict): A dictionary containing the counts of each edge in the graph.
+
+    Returns:
+    - float: The ER value for the given variant log, activity counts, and edge counts.
+    """
+    ER_sum = 0.0
     for variant, occurrence in variant_log.items():
         prob = get_probability(activity_counts, edge_counts, variant)
         #use this for the logs where probabilities get too small
         prob = max(prob, 1e-10)
         ER_sum += (-math.log(prob, 2))*occurrence
-        total_occurences += occurrence
-    ER = ER_sum/total_occurences
-    return ER
+    return ER_sum
 
 
 def get_ER_normalized(variant_log, activity_counts, edge_counts):
@@ -187,7 +222,9 @@ def compute_er_full(cases:  List, normalized: bool=True):
     return get_ER(dict(full_variant_log), act_full, edge_full)
 
 
-def compute_er_segments(segmented_cases:  List[List[List[float]]], normalized: bool=True):
+def compute_er_segments(segmented_cases:  List[List[List[float]]], 
+                        
+                        normalized: bool=True):
     seg_variant_log = defaultdict(int)
 
     for case in segmented_cases:
