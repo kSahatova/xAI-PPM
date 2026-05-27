@@ -18,3 +18,8 @@ trace_segmentation_test.ipynb
 train_lstm_bpi15_phase_level.py
 xai_utils/trace_segmentation/information_gain_based.py
 local_xai/utils/trace_segmentation/utils.py
+global_xai
+local_xai/cohortshapley
+local_xai/timeshap
+experiments/timeshap_bpi17.ipynb
+seqshap_bpi17.ipynb

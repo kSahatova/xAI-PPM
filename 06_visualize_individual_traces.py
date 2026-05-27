@@ -326,6 +326,203 @@ def plot_individual_traces(
     return fig
 
 
+# ── Most-frequent-pattern comparison across strategies ────────────────────────
+
+
+def plot_most_frequent_pattern_comparison(
+    explicands_per_strategy: Dict[str, Dict],
+    activity_lookup: dict,
+    sample: str,
+    strategies: Tuple[str, str] = ("per_event", "transition"),
+    pattern_type: str = "positional",
+    truncate_start: int = 0,
+    truncate_end: int = 0,
+    output_path: str = "",
+) -> Figure:
+    """Compare the single most-frequent segmentation pattern for two strategies.
+
+    One row is drawn per strategy; both rows share the same diverging SHAP
+    colour scale and the same x-axis (event position), so differences between
+    segmentation strategies are directly comparable.
+
+    Parameters
+    ----------
+    explicands_per_strategy : dict
+        Keys are strategy names (e.g. ``"per_event"``, ``"transition"``); values
+        are the per-sample ``explicands_info`` dicts normally passed to
+        ``plot_individual_traces``.
+    sample : str
+        Which prediction-outcome subset to use (``"tp"``, ``"fp"``, ``"fn"``, ``"tn"``).
+    strategies : tuple of two str
+        The two strategy keys to compare (must be present in
+        ``explicands_per_strategy``).
+    pattern_type : {"positional", "activity"}
+        Pattern-grouping method — same meaning as in ``plot_individual_traces``.
+    truncate_start, truncate_end : int
+        Events to drop from the start / end of each trace for display.
+    output_path : str
+        If non-empty, save the figure to this path.
+    """
+    # ── 1. For each strategy find the most frequent pattern + representative trace
+    strategy_rows: List[Tuple[str, int, dict, tuple, int]] = []
+    # (strategy_label, trace_id, sv_dict, pattern, count)
+
+    for strat in strategies:
+        explicands_info = explicands_per_strategy.get(strat)
+        if explicands_info is None:
+            continue
+        sv_list = explicands_info[sample].get("sv", [])
+        cases_list = explicands_info[sample].get("cases", [])
+
+        if not sv_list:
+            continue
+
+        if pattern_type == "activity":
+            all_patterns = [
+                _activity_change_points(sv, cases_list[i])
+                for i, sv in enumerate(sv_list)
+            ]
+        else:
+            all_patterns = [_change_points(sv["segment_ids"]) for sv in sv_list]
+
+        pattern_counts = Counter(all_patterns)
+        top_pat, top_count = pattern_counts.most_common(1)[0]
+
+        # First trace that matches the top pattern
+        for tid, sv_dict in enumerate(sv_list):
+            if all_patterns[tid] == top_pat:
+                strategy_rows.append((strat, tid, sv_dict, top_pat, top_count))
+                break
+
+    if not strategy_rows:
+        fig, ax = plt.subplots()
+        ax.text(
+            0.5, 0.5, "no data",
+            ha="center", va="center", transform=ax.transAxes,
+            fontsize=10, color="gray",
+        )
+        return fig
+
+    # ── 2. Shared SHAP colour scale across both strategies ────────────────────
+    all_svs = [
+        float(v)
+        for _, _, sv_dict, *_ in strategy_rows
+        for v in np.asarray(sv_dict["segment_sv"]).ravel()
+    ]
+    vmax = max(abs(min(all_svs)), abs(max(all_svs)), 1e-6)
+    norm = TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
+
+    # ── 3. Layout constants (mirrored from plot_individual_traces) ────────────
+    cell_w = 1.0
+    row_h = 1.4
+    gap = 0.3
+    n = len(strategy_rows)
+
+    trace_len = max(
+        max(sv_dict["segment_ids"][-1][-1] + 1 - truncate_start - truncate_end, 0)
+        for _, _, sv_dict, *_ in strategy_rows
+    )
+
+    fig_w = max(14, trace_len * 0.6 + 4)
+    pts_per_cell = fig_w / max(trace_len, 1) * 72
+    cell_font_size = min(max(int(pts_per_cell * 0.18), 9), 22)
+
+    fig, ax = plt.subplots(
+        figsize=(fig_w, n * (row_h + gap) + 2.0),
+        facecolor="white",
+    )
+    ax.set_facecolor("white")
+
+    # ── 4. Draw one row per strategy ──────────────────────────────────────────
+    for row_idx, (strat, trace_id, sv_dict, _, row_count) in enumerate(
+        strategy_rows
+    ):
+        y0 = (n - 1 - row_idx) * (row_h + gap)
+        explicands_info = explicands_per_strategy[strat]
+        case = explicands_info[sample]["cases"][trace_id]
+        seg_ids = sv_dict["segment_ids"]
+        shap_vals = np.asarray(sv_dict["segment_sv"]).ravel()
+
+        # Build event → colour lookup
+        event_color: Dict[int, tuple] = {}
+        for event_indices, sv in zip(seg_ids, shap_vals):
+            color = _SHAP_CMAP(norm(float(sv)))
+            for event_idx in event_indices:
+                event_color[event_idx] = color
+
+        row_trace_len = seg_ids[-1][-1] + 1
+        vis_end = row_trace_len - truncate_end
+
+        for event_idx in range(truncate_start, vis_end):
+            display_x = (event_idx - truncate_start) * cell_w
+            color = event_color.get(event_idx, (0.85, 0.85, 0.85, 1.0))
+            rect = mpatches.Rectangle(
+                (display_x, y0), cell_w, row_h,
+                facecolor=color, edgecolor="none", linewidth=0, zorder=2,
+            )
+            ax.add_patch(rect)
+            act_code = int(case[0, event_idx, 0])
+            act_name = activity_lookup.get(act_code, f"#{act_code}")
+            r, g, b, _ = color
+            txt_color = "black" if (0.299 * r + 0.587 * g + 0.114 * b) > 0.55 else "white"
+            txt = ax.text(
+                display_x + cell_w / 2, y0 + row_h / 2, act_name,
+                ha="center", va="center",
+                fontsize=cell_font_size, rotation=90,
+                color=txt_color, clip_on=True, zorder=3,
+            )
+            txt.set_clip_path(rect)  # type: ignore[arg-type]
+
+        # Segment boundary lines
+        for cp in _change_points(seg_ids):
+            if truncate_start < cp < vis_end:
+                display_cp = (cp - truncate_start) * cell_w
+                ax.plot(
+                    [display_cp, display_cp], [y0, y0 + row_h],
+                    color="#222222", linewidth=2.0, zorder=4,
+                )
+
+        # Row label: strategy name + pattern count
+        strat_label = strat.replace("_", "-")
+        label = f"{strat_label}\n$(n={row_count})$"
+        ax.text(
+            -0.5, y0 + row_h / 2, label,
+            ha="right", va="center", fontsize=19, linespacing=1.4,
+        )
+
+    # ── 5. Axes ───────────────────────────────────────────────────────────────
+    tick_display = np.arange(0, trace_len)
+    left_margin = 0.0 if truncate_start > 0 else -5.0
+    ax.set_xlim(left_margin, trace_len * cell_w)
+    ax.set_ylim(-0.5, n * (row_h + gap) + 0.3)
+    ax.set_xticks([i * cell_w + 0.5 for i in tick_display])
+    ax.set_xlabel("Event position", fontsize=21, labelpad=6)
+    ax.set_xticklabels(tick_display + truncate_start + 1, fontsize=19)
+    xlim_l, xlim_r = left_margin, trace_len * cell_w
+    label_x = (trace_len * cell_w / 2 - xlim_l) / (xlim_r - xlim_l)
+    ax.xaxis.set_label_coords(label_x, -0.06)
+    ax.set_yticks([])
+    ax.grid(False)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    # ── 6. Shared colorbar (flush right, same as plot_individual_traces) ──────
+    sm = ScalarMappable(cmap=_SHAP_CMAP, norm=Normalize(vmin=-vmax, vmax=vmax))
+    sm.set_array([])
+    cax = ax.inset_axes([1.01, 0.05, 0.02, 0.9])
+    cbar = fig.colorbar(sm, cax=cax)
+    cbar.set_label("Segment SHAP value", fontsize=19)
+    cbar.ax.tick_params(labelsize=19)
+
+    fig.tight_layout()
+
+    if output_path:
+        fig.savefig(output_path, dpi=150, bbox_inches="tight")
+        print(f"Saved → {output_path}")
+
+    return fig
+
+
 # ── Segment statistics LaTeX table ────────────────────────────────────────────
 
 def print_segment_stats_latex(
@@ -498,28 +695,38 @@ def main():
         print(f"Visualizing strategy: {strategy}")
         print(f"{'=' * 80}")
         for sample in SAMPLE_NAMES:
-            plot_individual_traces(
-                explicands_per_strategy[strategy][cohort],
-                activity_lookup,
-                sample=sample,
-                n_cases=3,
-                truncate_start=5,
-                truncate_end=5,
-                pattern_type=pattern_type,
-                output_path=osp.join(
-                    vis_dir,
-                    f"{cohort}_{strategy}_top3_patterns_{sample}.png",
-                ),
-            )
-        print_segment_stats_latex(
+             plot_most_frequent_pattern_comparison()
             explicands_per_strategy[strategy][cohort],
-            top_k=10,
-            output_path=osp.join(
-                sv_output_dir,
-                f"{strategy}_cohort_{cohort}",
-                f"{ds_name}_{strategy}_seg_stats.tex",
-            ),
-        )
+                        activity_lookup,
+                        sample=sample,
+            strategies: Tuple[str, str] = ("per_event", "transition"),
+            pattern_type: str = "positional",
+            truncate_start: int = 0,
+            truncate_end: int = 0,
+            output_path: str = "",
+            # plot_individual_traces(
+            #     explicands_per_strategy[strategy][cohort],
+            #     activity_lookup,
+            #     sample=sample,
+            #     n_cases=3,
+            #     truncate_start=5,
+            #     truncate_end=5,
+            #     pattern_type=pattern_type,
+            #     output_path=osp.join(
+            #         vis_dir,
+            #         f"{cohort}_{strategy}_top3_patterns_{sample}.png",
+            #     ),
+            # )
+        # print_segment_stats_latex(
+        #     explicands_per_strategy[strategy][cohort],
+        #     top_k=10,
+        #     output_path=osp.join(
+        #         sv_output_dir,
+        #         f"{strategy}_cohort_{cohort}",
+        #         f"{ds_name}_{strategy}_seg_stats.tex",
+        #     ),
+        # )
+   
 
 
 if __name__ == "__main__":
